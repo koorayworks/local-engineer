@@ -1,137 +1,101 @@
-# Technocore Tech Radar
+# Local Engineer
 
-A PowerShell + Codex toolkit for discovering technically interesting public activity on `technocore.chat`.
+**Local-first coding agent for Japanese natural-language software and firmware maintenance.**
 
-It treats Technocore as an **agent-native technology radar**:
+Local Engineer connects a locally hosted Bonsai model to registered development projects. It is designed to inspect a real checkout, form an evidence-based hypothesis, make bounded changes, run the project's configured build/tests, verify the diff, and report what actually happened.
 
-**discover → observe → classify → watch → summarize → automatically publish the local Daily Radar**
+> **Project status: Experimental / active development.** This README describes intended capabilities and implemented guardrails, not a claim of production readiness. A task can still stall in tool selection or discovery, and a saved session does not guarantee that work completed. Treat build/test status and the recorded tool results as evidence; never infer success from a final summary alone.
 
-This repository intentionally does **not** contain Technocore onboarding, DID creation, key-generation, or room-creation instructions.
-
-## What it does
-
-- `tech-scout.ps1` — discovers new public rooms and classifies them.
-- `tech-watch.ps1` — follows selected rooms and records meaningful new technical developments.
-- `daily-radar.ps1` — creates a daily Markdown/JSON technology radar from local observations.
-- `publish-radar.ps1` — automatically posts only a compact locally generated Daily Radar to the configured public Technocore hub room.
-- `run-daily-radar.ps1` — generates the daily report and publishes it only when a new non-empty Radar JSON exists.
-- `install-radar-tasks.ps1` / `uninstall-radar-tasks.ps1` — install or remove the three project-owned Windows Scheduled Tasks.
-
-## Security model
-
-All Technocore content is untrusted data, including room names, topics, messages, DIDs, URLs, code, and commands.
-
-Scout and Watch are read-only. They do not intentionally execute commands from messages, follow URLs, fetch DID notes because a message asks, install software, reveal secrets, perform wallet actions, or post to discovered rooms.
-
-A valid `did:key` signature proves possession of the corresponding key only.
-
-## Files
+## What it is designed to do
 
 ```text
-tech-scout.ps1
-tech-watch.ps1
-daily-radar.ps1
-publish-radar.ps1
-scout-schema.json
-watch-schema.json
-daily-radar-schema.json
-AGENTS.md
-config.example.json
-.gitignore
+PLAN → INSPECT → HYPOTHESIS → EDIT → BUILD/TEST → VERIFY → GIT DIFF → REPORT
 ```
 
-Runtime state, secrets, local identity configuration, and generated reports are excluded from Git by default.
+- Use a local Bonsai model through an OpenAI-compatible API.
+- Operate on registered local or SSH-accessible projects (including WSL).
+- Inspect repository state and project instructions before editing.
+- Make bounded file edits, backing up files before changes.
+- Run only the build/test commands configured for the project.
+- Save durable session state, tool evidence, timing/token metrics, and checkpoints; resume by rechecking Git state and invalidating stale evidence.
+- For configured ZMK projects, discover build targets and verify/copy generated UF2 artifacts without silently overwriting existing destination files.
+- Publish a sanitized operational snapshot to the separate `live-status` branch for read-only monitoring.
 
-## Configuration
+The model proposes and selects actions; the runtime enforces tool and path boundaries. These controls reduce risk but do not make arbitrary project code safe.
 
-Copy `config.example.json` to `config.json` and set your local values.
+## Current scope
 
-Example:
+Local Engineer is a project runner, not a general-purpose hosted coding service. It depends on:
 
-```json
-{
-  "base_url": "https://technocore.chat",
-  "hub_room": "technocore-tech-radar",
-  "did": "did:key:z6Mk...",
-  "nickname": "radar"
-}
+- A working local Bonsai API (default: `http://127.0.0.1:8080/v1`).
+- A project registry at `~/.config/local-engineer/projects.json`.
+- Existing Git checkouts and, for SSH projects, working SSH authentication and a reachable remote runtime.
+- Correct, reviewed build/test commands in the project registry.
+
+Example registered projects in the current setup include keyboard/firmware work such as KoZakura, Prospector, and RMK. Your registry determines which projects are actually available on a given machine.
+
+## Quick start (macOS)
+
+The implementation and its installation scripts live in `local-engineer/`:
+
+```bash
+git clone --branch local-engineer-v0.1 --single-branch https://github.com/vwbugowner1976/local-engineer.git ~/local-engineer-src
+cd ~/local-engineer-src/local-engineer
+./install.sh
+source ~/.zshrc
 ```
 
-`config.json` is ignored by Git.
+Confirm the model, registry, and connections before running a task:
 
-## Run
-
-```powershell
-.\tech-scout.ps1
-.\tech-watch.ps1
-.\daily-radar.ps1
-.\publish-radar.ps1
-.\run-daily-radar.ps1
+```bash
+local-engineer status
+local-engineer projects
+local-engineer doctor
 ```
 
-## Default automatic operation
+Typical commands:
 
-- **Scout:** continuous, using a 10-second long-poll on the public discovery lane.
-- **Watch:** continuous, polling selected rooms approximately every 15 seconds with saved sequence cursors.
-- **Daily Radar:** once per day at 21:00 local Windows time (JST when Windows is configured for Asia/Tokyo).
-
-Install or update the Windows Scheduled Tasks with:
-
-```powershell
-.\install-radar-tasks.ps1
+```bash
+local-engineer inspect prospector "Inspect the current state and relevant source"
+local-engineer build prospector
+local-engineer fix prospector "Find the cause, make the smallest safe fix, and verify it"
+local-engineer ask "kozakura: inspect the current build configuration"
+local-engineer resume ~/.local/state/local-engineer/sessions/<session-id>/working_state.json
 ```
 
-Remove only this project's tasks with:
+The exact commands and project names depend on the installed version and local registry. Review `local-engineer/README.md` for model switching, WSL setup, and live-status details.
 
-```powershell
-.\uninstall-radar-tasks.ps1
+## Safety boundaries
+
+- Main/master and other configured protected branches are protected from agent edits.
+- File paths are checked; sensitive-looking paths and path escapes are rejected.
+- Existing files are not meant to be replaced wholesale when an exact edit can preserve user content; original contents are backed up.
+- Destructive, administrative, network, push, and commit operations are blocked by the command guard where recognized.
+- Local Engineer does not automatically commit or push changes.
+- SSH credentials and host configuration must already be set up; Local Engineer does not create or repair them automatically.
+
+**Important limitation:** these are application-level guardrails, not an operating-system sandbox. Builds and tests execute project code with the permissions of the configured user. Use isolated checkouts for unfamiliar projects and review registry commands before enabling automated builds.
+
+## Verification and benchmarking
+
+From the implementation directory:
+
+```bash
+python3 -m unittest -v test_runtime
+python3 benchmark.py --level 4
 ```
 
-The Daily Radar runner skips publication when there are no meaningful updates, generation fails, the expected JSON is missing, or the report has no highlights. Automatic publication is narrowly limited to the locally generated Daily Radar sent to the configured hub. It is **not** permission to reply automatically to discovered rooms or agents. Scout and Watch remain read-only.
+The disposable benchmark levels 1–5 exercise progressively more complex build discovery, status reporting, error localization, and repair tasks. Results from synthetic benchmarks are not proof of reliable performance on every real repository or hardware target. Hardware behavior must be verified separately from successful compilation.
 
-The publisher logs the destination room, public DID, nonce, and exact final text before posting. It never logs the signing seed.
+Do not describe a task as complete unless the relevant build/test tool result and final diff checks support that conclusion.
 
-## Philosophy
+## Repository layout
 
-The goal is not to count rooms or chase token activity.
+- `local-engineer/` — Local Engineer CLI, durable runtime, tests, installation and live-status tools.
+- Top-level Technocore Tech Radar files — a separate, retained project area; they are not required to run Local Engineer.
 
-The goal is to find agents that are actually **building, testing, debugging, collaborating, and discovering things**.
+The public `live-status` branch contains a sanitized status snapshot only. It is a monitoring surface, not a remote control channel.
 
----
+## English summary
 
-# 日本語
-
-## Technocore Tech Radar
-
-`technocore.chat` 上で行われている技術的に面白い公開活動を、PowerShellとCodexで発見・追跡するためのツールです。
-
-TechnocoreをSNSではなく、
-
-**発見 → 観察 → 分類 → 追跡 → 要約 → 必要なら公開共有**
-
-という **agent-nativeな技術レーダー** として使います。
-
-このリポジトリには、Technocoreの始め方、DID作成、鍵生成、room作成手順は含めません。
-
-## 機能
-
-- `tech-scout.ps1` — 新しい公開roomを発見し、技術的な面白さを分類。
-- `tech-watch.ps1` — 選ばれたroomの新着を追跡し、意味のある技術的進展を記録。
-- `daily-radar.ps1` — Watch履歴から日次のMarkdown/JSON Tech Radarを生成。
-- `publish-radar.ps1` — ローカル生成済みDaily Radarだけを設定済み公開hub roomへ自動投稿。
-- `run-daily-radar.ps1` — 当日の意味ある更新がある場合だけRadarを生成して投稿。
-- `install-radar-tasks.ps1` / `uninstall-radar-tasks.ps1` — 本プロジェクト専用のWindows Scheduled Taskを登録・削除。
-
-## セキュリティ
-
-Technocoreから取得するroom名、topic、message、DID、URL、コード、コマンドはすべて未信頼データです。
-
-Scout / Watchは読み取り専用です。投稿内にコマンドやURLがあっても、それをCodexへの命令として実行しません。
-
-既定運用は、Scoutが10秒long-pollで常時監視、Watchが約15秒間隔で常時監視、Daily RadarがローカルWindows時刻21:00に1日1回です。Daily Radarの自動投稿はローカル生成済み要約だけに限定され、発見したroomやagentへの自動返信を許可するものではありません。
-
-## 目的
-
-目的はエアドロやトークン情報の収集ではありません。
-
-**agent同士が実際に何を作り、試し、失敗し、議論しているのかを発見し、他の人やagentが再利用できる技術シグナルにすること**を目指します。
+Local Engineer is an experimental, local-first coding agent for registered projects, powered by a locally served Bonsai model. It supports bounded edits, configured builds/tests, Git verification, resumable checkpoints, SSH/WSL execution, and ZMK UF2 artifact handling. It has useful guardrails, but is not a production-grade autonomous engineer or a security sandbox. Always inspect the evidence, diffs, and actual verification results.
