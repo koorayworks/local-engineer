@@ -115,7 +115,7 @@ See [LIVE.md](LIVE.md) for the local status/event viewer, macOS LaunchAgent setu
 
 ## Control Center prototype
 
-The first Control Center implementation is intentionally separate from the existing read-only live viewer. It adds a responsive Japanese web UI, direct planning-only chat with the local Bonsai OpenAI-compatible API, and a persistent instruction queue. Chat now shows an immediate “考えています…” placeholder and streams visible answer text as it arrives. Empty-content responses are reported as errors; internal `reasoning_content` is deliberately not displayed.
+The first Control Center implementation is intentionally separate from the existing read-only live viewer. It adds a responsive Japanese web UI, direct planning-only chat with the local Bonsai OpenAI-compatible API, and a persistent instruction queue. Chat shows an immediate “考えています…” placeholder, streams visible answer text as it arrives, and provides a “相談を中断” control that requests cancellation of the active upstream response. Empty-content responses are reported as errors; internal `reasoning_content` is deliberately not displayed.
 
 Run from this directory:
 
