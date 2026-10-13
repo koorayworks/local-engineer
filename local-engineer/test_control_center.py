@@ -104,8 +104,8 @@ class ControlCenterQueueTests(unittest.TestCase):
         class FakeResponse:
             def __init__(self):
                 self.lines = iter([
-                    b'data: {"choices":[{"delta":{"reasoning_content":"private reasoning"},"finish_reason":"stop"}]}\\n',
-                    b'data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":4,"total_tokens":16}}\\n',
+                    b'data: {"choices":[{"delta":{"reasoning_content":"private reasoning"},"finish_reason":"stop"}]}\n',
+                    b'data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":4,"total_tokens":16}}\n',
                 ])
             def __enter__(self):
                 return self
