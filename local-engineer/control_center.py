@@ -277,6 +277,8 @@ def bonsai_stream(message: str):
         method="POST",
     )
     received = False
+    finish_reason = None
+    usage = None
     try:
         with urllib.request.urlopen(request, timeout=120) as response:
             while True:
@@ -293,15 +295,32 @@ def bonsai_stream(message: str):
                     event = json.loads(event_data)
                 except json.JSONDecodeError:
                     continue
+                if isinstance(event.get("usage"), dict):
+                    usage = event["usage"]
                 choices = event.get("choices") or []
                 if not choices:
                     continue
-                delta = (choices[0].get("delta") or {}).get("content")
+                choice = choices[0]
+                if choice.get("finish_reason") is not None:
+                    finish_reason = choice["finish_reason"]
+                delta = (choice.get("delta") or {}).get("content")
                 if isinstance(delta, str) and delta:
                     received = True
                     yield {"delta": delta}
         if not received:
-            yield {"error": "Bonsaiから空の回答が返りました。APIのfinish_reasonとusageを確認してください。"}
+            details = []
+            if finish_reason is not None:
+                details.append("finish_reason=" + str(finish_reason))
+            if usage is not None:
+                tokens = ", ".join(
+                    key + "=" + str(usage[key])
+                    for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+                    if key in usage
+                )
+                if tokens:
+                    details.append("usage: " + tokens)
+            suffix = "（" + "、".join(details) + "）" if details else ""
+            yield {"error": "Bonsaiから表示可能な回答本文が返りませんでした" + suffix + "。reasoning_contentは表示していません。"}
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
         yield {"error": "Bonsai APIとの通信に失敗しました: " + str(exc)[:240]}
 
