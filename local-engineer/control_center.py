@@ -124,7 +124,7 @@ async function refresh(){
  }catch(e){note('接続エラー: '+e.message)}
 }
 function renderTasks(tasks){const box=$('tasks');box.replaceChildren();if(!tasks.length){const p=document.createElement('div');p.className='muted';p.textContent='キューは空です。';box.append(p);return}
- tasks.slice().reverse().forEach(t=>{const el=document.createElement('div');el.className='task';const row=document.createElement('div');row.className='row';const name=document.createElement('div');name.className='task-name';name.style.flex='1';name.textContent=t.title;const tag=document.createElement('span');tag.className='tag';tag.textContent=t.status;row.append(name,tag);const meta=document.createElement('div');meta.className='task-meta';meta.textContent='優先度: '+t.priority+' · '+t.created_at+' · '+t.id.slice(0,8);const del=document.createElement('button');del.textContent='削除';del.style.marginTop='8px';del.addEventListener('click',async()=>{try{await api('/api/tasks/'+encodeURIComponent(t.id),{method:'DELETE'});note('タスクを削除しました');refresh()}catch(e){note(e.message)}});el.append(row,meta,del);box.append(el)})
+ tasks.slice().reverse().forEach(t=>{const el=document.createElement('div');el.className='task';const row=document.createElement('div');row.className='row';const name=document.createElement('div');name.className='task-name';name.style.flex='1';name.textContent=t.title;const tag=document.createElement('span');tag.className='tag';tag.textContent=t.status;row.append(name,tag);const meta=document.createElement('div');meta.className='task-meta';meta.textContent='優先度: '+t.priority+' · '+t.created_at+' · '+t.id.slice(0,8);if(t.acceptance_criteria||t.verification_method||t.gate){const details=document.createElement('div');details.className='muted';details.style.marginTop='6px';details.style.whiteSpace='pre-wrap';details.textContent=[t.acceptance_criteria?'完了条件：'+t.acceptance_criteria:'',t.verification_method?'検証方法：'+t.verification_method:'',t.gate?'次へ進む条件：'+t.gate:''].filter(Boolean).join('\n');meta.append(document.createElement('br'),details)}const del=document.createElement('button');del.textContent='削除';del.style.marginTop='8px';del.addEventListener('click',async()=>{try{await api('/api/tasks/'+encodeURIComponent(t.id),{method:'DELETE'});note('タスクを削除しました');refresh()}catch(e){note(e.message)}});el.append(row,meta,del);box.append(el)})
 }
 $('connect').addEventListener('click',async()=>{token=$('token').value.trim();if(!token){note('トークンを入力してください');return}sessionStorage.setItem('le-token',token);connected=true;try{const s=await api('/api/status');note('接続しました');$('bonsai').textContent=s.bonsai?'API接続OK':'API未確認';await refresh()}catch(e){connected=false;note('接続できません: '+e.message)}});
 let activeChat=null;
@@ -158,7 +158,7 @@ $('propose-plan').addEventListener('click',async()=>{
  try{
   const data=await api('/api/plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({goal,request_id:requestId}),signal:controller.signal});
   proposedPlan=data.plan;const box=$('plan-preview');const summary=document.createElement('div');summary.className='msg ai';summary.textContent=proposedPlan.summary;box.append(summary);
-  const list=document.createElement('ol');for(const step of proposedPlan.steps){const li=document.createElement('li');li.style.margin='8px 0';li.textContent=step.title+'（'+step.priority+'）';list.append(li)}box.append(list);
+  const list=document.createElement('ol');for(const step of proposedPlan.steps){const li=document.createElement('li');li.style.margin='10px 0';const title=document.createElement('strong');title.textContent=step.title+'（'+step.priority+'）';li.append(title);for(const [label,key] of [['完了条件','acceptance_criteria'],['検証方法','verification_method'],['次へ進む条件','gate']]){if(step[key]){const detail=document.createElement('div');detail.className='muted';detail.style.marginTop='4px';detail.textContent=label+'：'+step[key];li.append(detail)}}list.append(li)}box.append(list);
   const approve=document.createElement('button');approve.className='primary';approve.textContent='この計画をキューに登録';approve.addEventListener('click',async()=>{
    approve.disabled=true;try{const saved=await api('/api/tasks/batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tasks:proposedPlan.steps})});note(saved.tasks.length+'件をキューに登録しました（未実行）');proposedPlan=null;box.replaceChildren();await refresh()}catch(e){note('登録できません: '+e.message);approve.disabled=false}
   });box.append(approve);note('計画案ができました。内容を確認してから登録してください。');
@@ -239,20 +239,25 @@ def add_tasks(items: list[dict]) -> list[dict]:
             raise ValueError("title must contain 1-1000 characters")
         if priority not in ("low", "normal", "high"):
             priority = "normal"
-        prepared.append((title, priority))
+        prepared.append((title, priority, item))
     with TASK_LOCK:
         tasks = load_tasks()
         if len(tasks) + len(prepared) > MAX_TASKS:
             raise ValueError("task queue is full")
         created = []
-        for title, priority in prepared:
-            created.append({
+        for title, priority, item in prepared:
+            task = {
                 "id": uuid.uuid4().hex,
                 "title": title,
                 "priority": priority,
                 "status": "queued",
                 "created_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
-            })
+            }
+            for field in ("acceptance_criteria", "verification_method", "gate"):
+                value = " ".join(str(item.get(field, "")).split())[:1000]
+                if value:
+                    task[field] = value
+            created.append(task)
         tasks.extend(created)
         save_tasks(tasks)
         return created
@@ -323,7 +328,13 @@ def bonsai_plan(goal: str, request_id: str | None = None) -> dict:
         "then hypothesis, implementation, tests, verification and diff review as appropriate. "
         "Do not propose commits, pushes, secret access, or destructive actions. "
         "Return ONLY a JSON object with this schema: "
-        '{"summary":"short Japanese summary","steps":[{"title":"one actionable task","priority":"normal"}]}. '
+        '{"summary":"short Japanese summary","steps":[{"title":"one actionable task","priority":"normal",'
+        '"acceptance_criteria":"observable condition proving completion","verification_method":"specific command, test, inspection, or hardware check",'
+        '"gate":"condition required before the next step; use empty string if none"}]}. '
+        "Each step must include concrete, concise Japanese acceptance_criteria and verification_method. "
+        "Use gate to state prerequisites or a safety stop condition, not generic filler. "
+        "The first step should gather evidence from the actual repository and configuration; do not assume files, pins, libraries, or hardware facts. "
+        "Keep inspection and implementation separate when the implementation choice depends on evidence. "
         "Each step priority must be low, normal, or high. Include 1 to 8 steps."
     )
     payload = {
@@ -385,10 +396,15 @@ def bonsai_plan(goal: str, request_id: str | None = None) -> dict:
         title = " ".join(str(item.get("title", "")).split())
         if not title:
             continue
-        steps.append({
+        step = {
             "title": title[:500],
             "priority": item.get("priority") if item.get("priority") in ("low", "normal", "high") else "normal",
-        })
+        }
+        for field in ("acceptance_criteria", "verification_method", "gate"):
+            value = " ".join(str(item.get(field, "")).split())
+            if value:
+                step[field] = value[:1000]
+        steps.append(step)
     if not steps:
         raise RuntimeError("Bonsai plan did not contain any usable steps")
     if request_id:
