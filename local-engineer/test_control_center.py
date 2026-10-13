@@ -102,21 +102,25 @@ class ControlCenterQueueTests(unittest.TestCase):
 
     def test_chat_stream_reports_empty_content_without_exposing_reasoning(self):
         class FakeResponse:
+            def __init__(self):
+                self.lines = iter([
+                    b'data: {"choices":[{"delta":{"reasoning_content":"private reasoning"},"finish_reason":"stop"}]}\\n',
+                    b'data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":4,"total_tokens":16}}\\n',
+                ])
             def __enter__(self):
                 return self
             def __exit__(self, *args):
                 return False
             def readline(self):
-                if hasattr(self, "done"):
-                    return b""
-                self.done = True
-                return b'data: {"choices":[{"delta":{"reasoning_content":"private reasoning"}}]}\n'
+                return next(self.lines, b"")
 
         with patch.dict("os.environ", {"BONSAI_MODEL": "local-bonsai-27b"}):
             with patch.object(cc.urllib.request, "urlopen", return_value=FakeResponse()):
                 result = list(cc.bonsai_stream("テスト"))
         self.assertEqual(len(result), 1)
         self.assertIn("error", result[0])
+        self.assertIn("finish_reason=stop", result[0]["error"])
+        self.assertIn("prompt_tokens=12", result[0]["error"])
         self.assertNotIn("private reasoning", json.dumps(result, ensure_ascii=False))
 
     def test_chat_rejects_empty_and_oversized_messages(self):
