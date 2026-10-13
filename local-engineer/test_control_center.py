@@ -123,6 +123,40 @@ class ControlCenterQueueTests(unittest.TestCase):
         self.assertIn("prompt_tokens=12", result[0]["error"])
         self.assertNotIn("private reasoning", json.dumps(result, ensure_ascii=False))
 
+    def test_bonsai_plan_returns_bounded_steps_without_executing_them(self):
+        class FakeResponse:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def read(self, _limit):
+                return json.dumps({"choices": [{"message": {"content":
+                    '{"summary":"確認してから進める","steps":['
+                    '{"title":"作業ツリーを確認","priority":"high"},'
+                    '{"title":"必要なテストを調べる","priority":"invalid"}]}'}}]}).encode()
+
+        with patch.dict("os.environ", {"BONSAI_MODEL": "local-bonsai-27b"}):
+            with patch.object(cc.urllib.request, "urlopen", return_value=FakeResponse()) as urlopen:
+                plan = cc.bonsai_plan("現在の状態を調べる")
+        self.assertEqual(plan["summary"], "確認してから進める")
+        self.assertEqual(len(plan["steps"]), 2)
+        self.assertEqual(plan["steps"][0]["priority"], "high")
+        self.assertEqual(plan["steps"][1]["priority"], "normal")
+        payload = json.loads(urlopen.call_args.args[0].data.decode())
+        self.assertFalse(payload["stream"])
+        self.assertIn("Return ONLY a JSON object", payload["messages"][0]["content"])
+
+    def test_add_tasks_validates_then_persists_batch(self):
+        tasks = cc.add_tasks([
+            {"title": "状態を確認", "priority": "high"},
+            {"title": "結果を報告", "priority": "normal"},
+        ])
+        self.assertEqual(len(tasks), 2)
+        self.assertEqual(cc.load_tasks(), tasks)
+        with self.assertRaises(ValueError):
+            cc.add_tasks([{"title": "valid"}, {"title": ""}])
+        self.assertEqual(cc.load_tasks(), tasks)
+
     def test_chat_rejects_empty_and_oversized_messages(self):
         with self.assertRaises(ValueError):
             cc.bonsai_chat(" ")
