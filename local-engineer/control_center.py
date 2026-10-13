@@ -15,7 +15,6 @@ import os
 import pathlib
 import secrets
 import threading
-import socket
 import urllib.error
 import urllib.request
 import uuid
@@ -475,7 +474,13 @@ def bonsai_stream(message: str, request_id: str | None = None):
                     details.append("usage: " + tokens)
             suffix = "（" + "、".join(details) + "）" if details else ""
             yield {"error": "Bonsaiから表示可能な回答本文が返りませんでした" + suffix + "。reasoning_contentは表示していません。"}
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError, ValueError) as exc:
+        if request_id:
+            with STREAM_LOCK:
+                state = ACTIVE_STREAMS.get(request_id)
+                if state is not None and state["cancelled"].is_set():
+                    yield {"cancelled": True}
+                    return
         yield {"error": "Bonsai APIとの通信に失敗しました: " + str(exc)[:240]}
 
 
