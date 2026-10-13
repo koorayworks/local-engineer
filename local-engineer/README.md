@@ -111,3 +111,27 @@ Live benchmark levels 1–5 create disposable repos without commits. They test b
 ## Live status viewer
 
 See [LIVE.md](LIVE.md) for the local status/event viewer, macOS LaunchAgent setup, and the sanitized `live-status` branch integration.
+
+
+## Control Center prototype
+
+The first Control Center implementation is intentionally separate from the existing read-only live viewer. It adds a responsive Japanese web UI, direct planning-only chat with the local Bonsai OpenAI-compatible API, and a persistent instruction queue.
+
+Run from this directory:
+
+```bash
+python3 control_center.py --host 127.0.0.1 --port 8766
+```
+
+Open `http://127.0.0.1:8766/` and enter the bearer token printed at startup. The token is stored at `~/.local/state/local-engineer/control-center/auth.token` with owner-only permissions where supported. API requests require the token. The queue is persisted at `~/.local/state/local-engineer/control-center/tasks.json`.
+
+For phone access on a trusted LAN, bind explicitly to the Mac's reachable interface or `0.0.0.0` and use the token. Do not expose this server through an unauthenticated public endpoint or Funnel. Prefer access through a trusted private network such as Tailscale and keep the token private.
+
+**Current prototype boundary:** chat calls Bonsai for discussion only and has no file-edit/build tools. Queue items are saved and can be deleted, but are not yet executed by Local Engineer. Status and event data are read from the existing session files. No task is marked complete based on chat output. Automatic queue dispatch, stop/resume/cancel integration, external AI adapters, and full end-to-end verification are future steps.
+
+Run the new unit tests alongside the existing runtime tests:
+
+```bash
+python3 -m unittest -v test_control_center
+python3 -m unittest -v test_runtime
+```
