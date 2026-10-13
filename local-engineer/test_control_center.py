@@ -132,7 +132,10 @@ class ControlCenterQueueTests(unittest.TestCase):
             def read(self, _limit):
                 return json.dumps({"choices": [{"message": {"content":
                     '{"summary":"確認してから進める","steps":['
-                    '{"title":"作業ツリーを確認","priority":"high"},'
+                    '{"title":"作業ツリーを確認","priority":"high",'
+                    '"acceptance_criteria":"変更前の状態が記録されている",'
+                    '"verification_method":"git status と対象ファイルを確認",'
+                    '"gate":"作業ツリーと対象ブランチを特定してから進む"},'
                     '{"title":"必要なテストを調べる","priority":"invalid"}]}'}}]}).encode()
 
         with patch.dict("os.environ", {"BONSAI_MODEL": "local-bonsai-27b"}):
@@ -141,6 +144,9 @@ class ControlCenterQueueTests(unittest.TestCase):
         self.assertEqual(plan["summary"], "確認してから進める")
         self.assertEqual(len(plan["steps"]), 2)
         self.assertEqual(plan["steps"][0]["priority"], "high")
+        self.assertEqual(plan["steps"][0]["acceptance_criteria"], "変更前の状態が記録されている")
+        self.assertEqual(plan["steps"][0]["verification_method"], "git status と対象ファイルを確認")
+        self.assertEqual(plan["steps"][0]["gate"], "作業ツリーと対象ブランチを特定してから進む")
         self.assertEqual(plan["steps"][1]["priority"], "normal")
         payload = json.loads(urlopen.call_args.args[0].data.decode())
         self.assertFalse(payload["stream"])
@@ -177,9 +183,15 @@ class ControlCenterQueueTests(unittest.TestCase):
 
     def test_add_tasks_validates_then_persists_batch(self):
         tasks = cc.add_tasks([
-            {"title": "状態を確認", "priority": "high"},
+            {"title": "状態を確認", "priority": "high",
+             "acceptance_criteria": "状態が記録される",
+             "verification_method": "status を確認",
+             "gate": "対象を特定してから進む"},
             {"title": "結果を報告", "priority": "normal"},
         ])
+        self.assertEqual(tasks[0]["acceptance_criteria"], "状態が記録される")
+        self.assertEqual(tasks[0]["verification_method"], "status を確認")
+        self.assertEqual(tasks[0]["gate"], "対象を特定してから進む")
         self.assertEqual(len(tasks), 2)
         self.assertEqual(cc.load_tasks(), tasks)
         with self.assertRaises(ValueError):
