@@ -15,6 +15,7 @@ import os
 import pathlib
 import secrets
 import threading
+import socket
 import urllib.error
 import urllib.request
 import uuid
@@ -35,6 +36,8 @@ MAX_BODY = 16_000
 MAX_TASKS = 1000
 TASK_LOCK = threading.Lock()
 AUTH_TOKEN = ""
+STREAM_LOCK = threading.Lock()
+ACTIVE_STREAMS: dict[str, dict] = {}
 
 
 HTML = r"""<!doctype html>
@@ -86,7 +89,7 @@ textarea{resize:vertical;min-height:85px}.row{display:flex;gap:8px;align-items:c
 <section class="panel" id="tab-chat"><div class="section-title">Bonsaiに相談 <span class="tag">ローカルAPI</span></div>
 <div class="feed" id="feed"><div class="msg ai"><div class="who">Local Engineer</div>接続後、Bonsaiに技術相談できます。このチャットは相談用で、コード編集やビルドを直接実行しません。</div></div>
 <textarea id="chat-input" placeholder="例：STM32F411でWS2812をPWM＋DMA駆動する際の確認事項を整理して"></textarea>
-<div class="row" style="margin-top:8px"><button id="send" class="primary">Bonsaiへ送信</button><span class="muted">相談のみ・編集は行いません</span></div>
+<div class="row" style="margin-top:8px"><button id="send" class="primary">Bonsaiへ送信</button><button id="cancel-chat" class="hidden">相談を中断</button><span class="muted">相談のみ・編集は行いません</span></div>
 </section>
 <section class="panel" id="tab-queue"><div class="section-title">指示キュー <span class="tag">実行待ち</span></div>
 <div class="section-title" style="margin-top:4px">Bonsaiに作業計画を提案してもらう</div>
@@ -123,7 +126,27 @@ function renderTasks(tasks){const box=$('tasks');box.replaceChildren();if(!tasks
  tasks.slice().reverse().forEach(t=>{const el=document.createElement('div');el.className='task';const row=document.createElement('div');row.className='row';const name=document.createElement('div');name.className='task-name';name.style.flex='1';name.textContent=t.title;const tag=document.createElement('span');tag.className='tag';tag.textContent=t.status;row.append(name,tag);const meta=document.createElement('div');meta.className='task-meta';meta.textContent='優先度: '+t.priority+' · '+t.created_at+' · '+t.id.slice(0,8);const del=document.createElement('button');del.textContent='削除';del.style.marginTop='8px';del.addEventListener('click',async()=>{try{await api('/api/tasks/'+encodeURIComponent(t.id),{method:'DELETE'});note('タスクを削除しました');refresh()}catch(e){note(e.message)}});el.append(row,meta,del);box.append(el)})
 }
 $('connect').addEventListener('click',async()=>{token=$('token').value.trim();if(!token){note('トークンを入力してください');return}sessionStorage.setItem('le-token',token);connected=true;try{const s=await api('/api/status');note('接続しました');$('bonsai').textContent=s.bonsai?'API接続OK':'API未確認';await refresh()}catch(e){connected=false;note('接続できません: '+e.message)}});
-$('send').addEventListener('click',async()=>{const text=$('chat-input').value.trim();if(!text)return;if(!connected){note('先に接続してください');return}addMsg('user',text);$('chat-input').value='';$('send').disabled=true;const answer=addMsg('ai','考えています…');let received=false;try{const r=await fetch('/api/chat/stream',{method:'POST',headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({message:text})});if(!r.ok){const d=await r.json().catch(()=>({error:'HTTP '+r.status}));throw new Error(d.error||('HTTP '+r.status))}if(!r.body)throw new Error('このブラウザはストリーミング表示に対応していません');const reader=r.body.getReader();const decoder=new TextDecoder();let pending='';while(true){const part=await reader.read();pending+=decoder.decode(part.value||new Uint8Array(),{stream:!part.done});const rows=pending.split('\n');pending=rows.pop()||'';for(const row of rows){if(!row.trim())continue;const item=JSON.parse(row);if(item.delta){if(!received){answer.textContent='';received=true}answer.textContent+=item.delta;$('feed').scrollTop=$('feed').scrollHeight}if(item.error)throw new Error(item.error)}if(part.done)break}if(pending.trim()){const item=JSON.parse(pending);if(item.delta){if(!received)answer.textContent='';received=true;answer.textContent+=item.delta}if(item.error)throw new Error(item.error)}if(!received)answer.textContent='回答を受信できませんでした（空の応答）'}catch(e){answer.textContent='エラー: '+e.message;note(e.message)}finally{$('send').disabled=false}});
+let activeChat=null;
+$('send').addEventListener('click',async()=>{
+ const text=$('chat-input').value.trim();if(!text)return;if(!connected){note('先に接続してください');return}
+ addMsg('user',text);$('chat-input').value='';$('send').disabled=true;
+ const cancel=$('cancel-chat');cancel.classList.remove('hidden');const answer=addMsg('ai','考えています…');
+ const requestId=crypto.randomUUID();const controller=new AbortController();activeChat={requestId,controller};let received=false;
+ try{
+  const r=await fetch('/api/chat/stream',{method:'POST',headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({message:text,request_id:requestId}),signal:controller.signal});
+  if(!r.ok){const d=await r.json().catch(()=>({error:'HTTP '+r.status}));throw new Error(d.error||('HTTP '+r.status))}
+  if(!r.body)throw new Error('このブラウザはストリーミング表示に対応していません');
+  const reader=r.body.getReader();const decoder=new TextDecoder();let pending='';
+  while(true){const part=await reader.read();pending+=decoder.decode(part.value||new Uint8Array(),{stream:!part.done});const rows=pending.split('\n');pending=rows.pop()||'';for(const row of rows){if(!row.trim())continue;const item=JSON.parse(row);if(item.delta){if(!received){answer.textContent='';received=true}answer.textContent+=item.delta;$('feed').scrollTop=$('feed').scrollHeight}if(item.error)throw new Error(item.error)}if(part.done)break}
+  if(pending.trim()){const item=JSON.parse(pending);if(item.delta){if(!received)answer.textContent='';received=true;answer.textContent+=item.delta}if(item.error)throw new Error(item.error)}
+  if(!received)answer.textContent='回答を受信できませんでした（空の応答）';
+ }catch(e){if(e.name==='AbortError')answer.textContent='相談を中断しました。';else{answer.textContent='エラー: '+e.message;note(e.message)}}finally{if(activeChat&&activeChat.requestId===requestId)activeChat=null;$('send').disabled=false;cancel.classList.add('hidden')}
+});
+$('cancel-chat').addEventListener('click',async()=>{
+ if(!activeChat)return;const current=activeChat;$('cancel-chat').disabled=true;
+ try{await api('/api/chat/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({request_id:current.requestId})})}catch(e){note('中断要求を送信しました。'+e.message)}
+ current.controller.abort();$('cancel-chat').disabled=false;
+});
 $('chat-input').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey))$('send').click()});
 let proposedPlan=null;
 $('propose-plan').addEventListener('click',async()=>{
@@ -372,8 +395,8 @@ def _chat_messages(message: str) -> list[dict]:
     ]
 
 
-def bonsai_stream(message: str):
-    """Yield visible answer deltas or a safe diagnostic error; never expose reasoning_content."""
+def bonsai_stream(message: str, request_id: str | None = None):
+    """Yield visible answer deltas; a cancel request closes the active upstream response."""
     message = str(message).strip()
     if not message or len(message) > 4000:
         raise ValueError("message must contain 1-4000 characters")
@@ -395,7 +418,22 @@ def bonsai_stream(message: str):
     usage = None
     try:
         with urllib.request.urlopen(request, timeout=120) as response:
+            if request_id:
+                with STREAM_LOCK:
+                    state = ACTIVE_STREAMS.get(request_id)
+                    if state is not None:
+                        state["response"] = response
+                        if state["cancelled"].is_set():
+                            response.close()
+                            yield {"cancelled": True}
+                            return
             while True:
+                if request_id:
+                    with STREAM_LOCK:
+                        state = ACTIVE_STREAMS.get(request_id)
+                        if state is None or state["cancelled"].is_set():
+                            yield {"cancelled": True}
+                            return
                 raw_line = response.readline()
                 if not raw_line:
                     break
@@ -532,20 +570,53 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/chat":
                 reply = bonsai_chat(body.get("message", ""))
                 self._send_json({"reply": reply})
+            elif path == "/api/chat/cancel":
+                request_id = str(body.get("request_id", ""))
+                with STREAM_LOCK:
+                    state = ACTIVE_STREAMS.get(request_id)
+                    if not request_id or state is None:
+                        self._send_json({"ok": False, "error": "active consultation not found"}, 404)
+                        return
+                    state["cancelled"].set()
+                    upstream = state.get("response")
+                    if upstream is not None:
+                        try:
+                            upstream.close()
+                        except OSError:
+                            pass
+                self._send_json({"ok": True, "cancel_requested": True})
             elif path == "/api/chat/stream":
                 message = str(body.get("message", "")).strip()
+                request_id = str(body.get("request_id", ""))
                 if not message or len(message) > 4000:
                     raise ValueError("message must contain 1-4000 characters")
+                if not request_id or len(request_id) > 100:
+                    raise ValueError("request_id is required")
+                with STREAM_LOCK:
+                    if request_id in ACTIVE_STREAMS:
+                        raise ValueError("duplicate request_id")
+                    ACTIVE_STREAMS[request_id] = {"cancelled": threading.Event(), "response": None}
                 self.send_response(200)
                 self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
                 self.send_header("Cache-Control", "no-cache, no-transform")
                 self.send_header("X-Accel-Buffering", "no")
                 self.send_header("Connection", "close")
                 self.end_headers()
-                for item in bonsai_stream(message):
-                    self.wfile.write((json.dumps(item, ensure_ascii=False) + "\n").encode("utf-8"))
-                    self.wfile.flush()
-                self.close_connection = True
+                try:
+                    for item in bonsai_stream(message, request_id=request_id):
+                        if item.get("cancelled"):
+                            break
+                        self.wfile.write((json.dumps(item, ensure_ascii=False) + "\n").encode("utf-8"))
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    with STREAM_LOCK:
+                        state = ACTIVE_STREAMS.get(request_id)
+                        if state:
+                            state["cancelled"].set()
+                finally:
+                    with STREAM_LOCK:
+                        ACTIVE_STREAMS.pop(request_id, None)
+                    self.close_connection = True
             else:
                 self._send_json({"error": "not found"}, 404)
         except ValueError as exc:
