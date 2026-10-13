@@ -205,8 +205,20 @@ def bonsai_chat(message: str) -> str:
     message = str(message).strip()
     if not message or len(message) > 4000:
         raise ValueError("message must contain 1-4000 characters")
+    model = os.environ.get("BONSAI_MODEL", "").strip()
+    if not model:
+        models_request = urllib.request.Request(API_BASE.rstrip("/") + "/models", method="GET")
+        try:
+            with urllib.request.urlopen(models_request, timeout=5) as response:
+                models_data = json.loads(response.read(500_000).decode("utf-8"))
+            available = models_data.get("data", [])
+            model = str(available[0].get("id", "")) if available else ""
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, AttributeError, TypeError):
+            model = ""
+    if not model:
+        model = "bonsai"
     payload = {
-        "model": os.environ.get("BONSAI_MODEL", "bonsai"),
+        "model": model,
         "messages": [
             {
                 "role": "system",
