@@ -146,6 +146,35 @@ class ControlCenterQueueTests(unittest.TestCase):
         self.assertFalse(payload["stream"])
         self.assertIn("Return ONLY a JSON object", payload["messages"][0]["content"])
 
+    def test_bonsai_plan_stops_if_cancelled_before_response_read(self):
+        import threading
+
+        class FakeResponse:
+            closed = False
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def close(self):
+                self.closed = True
+            def read(self, _limit):
+                raise AssertionError("cancelled plan must not read the response")
+
+        response = FakeResponse()
+        event = threading.Event()
+        event.set()
+        with cc.PLAN_LOCK:
+            cc.ACTIVE_PLANS["plan-cancel-test"] = {"cancelled": event, "response": None}
+        try:
+            with patch.dict("os.environ", {"BONSAI_MODEL": "local-bonsai-27b"}):
+                with patch.object(cc.urllib.request, "urlopen", return_value=response):
+                    with self.assertRaisesRegex(RuntimeError, "cancelled"):
+                        cc.bonsai_plan("確認する", request_id="plan-cancel-test")
+            self.assertTrue(response.closed)
+        finally:
+            with cc.PLAN_LOCK:
+                cc.ACTIVE_PLANS.pop("plan-cancel-test", None)
+
     def test_add_tasks_validates_then_persists_batch(self):
         tasks = cc.add_tasks([
             {"title": "状態を確認", "priority": "high"},
