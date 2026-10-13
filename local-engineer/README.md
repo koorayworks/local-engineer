@@ -127,7 +127,7 @@ Open `http://127.0.0.1:8766/` and enter the bearer token printed at startup. The
 
 For phone access on a trusted LAN, bind explicitly to the Mac's reachable interface or `0.0.0.0` and use the token. Do not expose this server through an unauthenticated public endpoint or Funnel. Prefer access through a trusted private network such as Tailscale and keep the token private.
 
-**Current prototype boundary:** chat calls Bonsai for discussion only and has no file-edit/build tools. Queue items are saved and can be deleted, but are not yet executed by Local Engineer. Status and event data are read from the existing session files. No task is marked complete based on chat output. Automatic queue dispatch, stop/resume/cancel integration, external AI adapters, and full end-to-end verification are future steps.
+The queue panel can ask Bonsai to propose a bounded JSON plan (up to eight steps). The user reviews the summary and steps and explicitly approves adding them to the persistent queue. Batch registration validates the steps and saves them together. This is **planning and queue registration only**: queued items are still not executed by Local Engineer. Status and event data are read from the existing session files. No task is marked complete based on chat output. Automatic queue dispatch, stop/resume/cancel integration, external AI adapters, and full end-to-end verification remain future steps.
 
 Run the new unit tests alongside the existing runtime tests:
 
