@@ -594,14 +594,40 @@ class Handler(BaseHTTPRequestHandler):
                 task = add_task(body.get("title", ""), body.get("priority", "normal"))
                 self._send_json({"task": task}, 201)
             elif path == "/api/plan":
-                plan = bonsai_plan(body.get("goal", ""))
-                self._send_json({"plan": plan})
+                request_id = str(body.get("request_id", ""))
+                if not request_id or len(request_id) > 100:
+                    raise ValueError("request_id is required")
+                with PLAN_LOCK:
+                    if request_id in ACTIVE_PLANS:
+                        raise ValueError("duplicate request_id")
+                    ACTIVE_PLANS[request_id] = {"cancelled": threading.Event(), "response": None}
+                try:
+                    plan = bonsai_plan(body.get("goal", ""), request_id=request_id)
+                    self._send_json({"plan": plan})
+                finally:
+                    with PLAN_LOCK:
+                        ACTIVE_PLANS.pop(request_id, None)
             elif path == "/api/tasks/batch":
                 created = add_tasks(body.get("tasks", []))
                 self._send_json({"tasks": created}, 201)
             elif path == "/api/chat":
                 reply = bonsai_chat(body.get("message", ""))
                 self._send_json({"reply": reply})
+            elif path == "/api/plan/cancel":
+                request_id = str(body.get("request_id", ""))
+                with PLAN_LOCK:
+                    state = ACTIVE_PLANS.get(request_id)
+                    if not request_id or state is None:
+                        self._send_json({"ok": False, "error": "active plan generation not found"}, 404)
+                        return
+                    state["cancelled"].set()
+                    upstream = state.get("response")
+                    if upstream is not None:
+                        try:
+                            upstream.close()
+                        except OSError:
+                            pass
+                self._send_json({"ok": True, "cancel_requested": True})
             elif path == "/api/chat/cancel":
                 request_id = str(body.get("request_id", ""))
                 with STREAM_LOCK:
