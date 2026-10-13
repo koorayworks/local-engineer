@@ -37,6 +37,8 @@ TASK_LOCK = threading.Lock()
 AUTH_TOKEN = ""
 STREAM_LOCK = threading.Lock()
 ACTIVE_STREAMS: dict[str, dict] = {}
+PLAN_LOCK = threading.Lock()
+ACTIVE_PLANS: dict[str, dict] = {}
 
 
 HTML = r"""<!doctype html>
@@ -303,7 +305,7 @@ def bonsai_chat(message: str) -> str:
         raise RuntimeError("Bonsai API response did not contain a chat reply") from exc
 
 
-def bonsai_plan(goal: str) -> dict:
+def bonsai_plan(goal: str, request_id: str | None = None) -> dict:
     """Ask Bonsai for a bounded JSON plan; planning never executes the tasks."""
     goal = str(goal).strip()
     if not goal or len(goal) > 2000:
@@ -333,9 +335,30 @@ def bonsai_plan(goal: str) -> dict:
     )
     try:
         with urllib.request.urlopen(request, timeout=120) as response:
+            if request_id:
+                with PLAN_LOCK:
+                    state = ACTIVE_PLANS.get(request_id)
+                    cancelled = state is None or state["cancelled"].is_set()
+                    if state is not None:
+                        state["response"] = response
+                if cancelled:
+                    response.close()
+                    raise RuntimeError("plan generation cancelled")
             data = json.loads(response.read(2_000_000).decode("utf-8"))
+        if request_id:
+            with PLAN_LOCK:
+                state = ACTIVE_PLANS.get(request_id)
+                if state is None or state["cancelled"].is_set():
+                    raise RuntimeError("plan generation cancelled")
         content = data["choices"][0]["message"]["content"]
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+    except RuntimeError:
+        raise
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError, IndexError, TypeError, OSError, ValueError) as exc:
+        if request_id:
+            with PLAN_LOCK:
+                state = ACTIVE_PLANS.get(request_id)
+                if state is not None and state["cancelled"].is_set():
+                    raise RuntimeError("plan generation cancelled") from exc
         raise RuntimeError("Bonsai plan request failed or returned an invalid response") from exc
     if not isinstance(content, str):
         raise RuntimeError("Bonsai did not return a text plan")
