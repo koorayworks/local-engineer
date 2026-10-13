@@ -87,9 +87,9 @@ class ControlCenterQueueTests(unittest.TestCase):
                 return next(self.lines, b"")
 
         events = [
-            b'data: {"choices":[{"delta":{"content":"こんにちは"}}]}\\n',
-            b'data: {"choices":[{"delta":{"content":"！"}}]}\\n',
-            b'data: [DONE]\\n',
+            b'data: {"choices":[{"delta":{"content":"こんにちは"}}]}\n',
+            b'data: {"choices":[{"delta":{"content":"！"}}]}\n',
+            b'data: [DONE]\n',
         ]
         with patch.dict("os.environ", {"BONSAI_MODEL": "local-bonsai-27b"}):
             with patch.object(cc.urllib.request, "urlopen", return_value=FakeResponse(events)) as urlopen:
@@ -110,7 +110,7 @@ class ControlCenterQueueTests(unittest.TestCase):
                 if hasattr(self, "done"):
                     return b""
                 self.done = True
-                return b'data: {"choices":[{"delta":{"reasoning_content":"private reasoning"}}]}\\n'
+                return b'data: {"choices":[{"delta":{"reasoning_content":"private reasoning"}}]}\n'
 
         with patch.dict("os.environ", {"BONSAI_MODEL": "local-bonsai-27b"}):
             with patch.object(cc.urllib.request, "urlopen", return_value=FakeResponse()):
