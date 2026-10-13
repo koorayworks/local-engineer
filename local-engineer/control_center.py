@@ -89,9 +89,14 @@ textarea{resize:vertical;min-height:85px}.row{display:flex;gap:8px;align-items:c
 <div class="row" style="margin-top:8px"><button id="send" class="primary">Bonsaiへ送信</button><span class="muted">相談のみ・編集は行いません</span></div>
 </section>
 <section class="panel" id="tab-queue"><div class="section-title">指示キュー <span class="tag">実行待ち</span></div>
-<textarea id="task-input" placeholder="実行したい作業を具体的に記入"></textarea>
+<div class="section-title" style="margin-top:4px">Bonsaiに作業計画を提案してもらう</div>
+<textarea id="plan-goal" placeholder="例：RMK版PG1KBの現状を調べ、次に必要な作業を段階的に整理して"></textarea>
+<div class="row" style="margin-top:8px"><button id="propose-plan" class="primary">計画を作成</button><span class="muted">提案だけでは実行されません</span></div>
+<div id="plan-preview" style="margin:10px 0"></div>
+<div class="section-title" style="margin-top:18px">手動でタスクを追加</div>
+<textarea id="task-input" placeholder="キューに登録する作業を具体的に記入"></textarea>
 <div class="row" style="margin-top:8px"><select id="priority" aria-label="優先度"><option value="normal">通常</option><option value="high">高</option><option value="low">低</option></select><button id="add-task" class="primary">キューに追加</button></div>
-<div class="foot">現在はキューへの永続登録までです。自動実行ランナーは未接続なので、追加してもファイル変更やビルドは開始されません。</div>
+<div class="foot">Bonsaiの計画を確認してからキューに登録できます。キューは保存のみで、実行ランナーはまだ接続されていません。</div>
 <div id="tasks" style="margin-top:12px"></div>
 </section>
 </div>
@@ -120,6 +125,20 @@ function renderTasks(tasks){const box=$('tasks');box.replaceChildren();if(!tasks
 $('connect').addEventListener('click',async()=>{token=$('token').value.trim();if(!token){note('トークンを入力してください');return}sessionStorage.setItem('le-token',token);connected=true;try{const s=await api('/api/status');note('接続しました');$('bonsai').textContent=s.bonsai?'API接続OK':'API未確認';await refresh()}catch(e){connected=false;note('接続できません: '+e.message)}});
 $('send').addEventListener('click',async()=>{const text=$('chat-input').value.trim();if(!text)return;if(!connected){note('先に接続してください');return}addMsg('user',text);$('chat-input').value='';$('send').disabled=true;const answer=addMsg('ai','考えています…');let received=false;try{const r=await fetch('/api/chat/stream',{method:'POST',headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({message:text})});if(!r.ok){const d=await r.json().catch(()=>({error:'HTTP '+r.status}));throw new Error(d.error||('HTTP '+r.status))}if(!r.body)throw new Error('このブラウザはストリーミング表示に対応していません');const reader=r.body.getReader();const decoder=new TextDecoder();let pending='';while(true){const part=await reader.read();pending+=decoder.decode(part.value||new Uint8Array(),{stream:!part.done});const rows=pending.split('\n');pending=rows.pop()||'';for(const row of rows){if(!row.trim())continue;const item=JSON.parse(row);if(item.delta){if(!received){answer.textContent='';received=true}answer.textContent+=item.delta;$('feed').scrollTop=$('feed').scrollHeight}if(item.error)throw new Error(item.error)}if(part.done)break}if(pending.trim()){const item=JSON.parse(pending);if(item.delta){if(!received)answer.textContent='';received=true;answer.textContent+=item.delta}if(item.error)throw new Error(item.error)}if(!received)answer.textContent='回答を受信できませんでした（空の応答）'}catch(e){answer.textContent='エラー: '+e.message;note(e.message)}finally{$('send').disabled=false}});
 $('chat-input').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey))$('send').click()});
+let proposedPlan=null;
+$('propose-plan').addEventListener('click',async()=>{
+ const goal=$('plan-goal').value.trim();if(!goal){$('plan-goal').focus();return}
+ if(!connected){note('先に接続してください');return}
+ const btn=$('propose-plan');btn.disabled=true;btn.textContent='計画中…';$('plan-preview').replaceChildren();note('Bonsaiに計画を依頼しています…');
+ try{
+  const data=await api('/api/plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({goal})});
+  proposedPlan=data.plan;const box=$('plan-preview');const summary=document.createElement('div');summary.className='msg ai';summary.textContent=proposedPlan.summary;box.append(summary);
+  const list=document.createElement('ol');for(const step of proposedPlan.steps){const li=document.createElement('li');li.style.margin='8px 0';li.textContent=step.title+'（'+step.priority+'）';list.append(li)}box.append(list);
+  const approve=document.createElement('button');approve.className='primary';approve.textContent='この計画をキューに登録';approve.addEventListener('click',async()=>{
+   approve.disabled=true;try{const saved=await api('/api/tasks/batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tasks:proposedPlan.steps})});note(saved.tasks.length+'件をキューに登録しました（未実行）');proposedPlan=null;box.replaceChildren();await refresh()}catch(e){note('登録できません: '+e.message);approve.disabled=false}
+  });box.append(approve);note('計画案ができました。内容を確認してから登録してください。');
+ }catch(e){note('計画を作成できません: '+e.message)}finally{btn.disabled=false;btn.textContent='計画を作成'}
+});
 $('add-task').addEventListener('click',async()=>{const title=$('task-input').value.trim();if(!title){$('task-input').focus();return}if(!connected){note('先に接続してください');return}try{await api('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title,priority:$('priority').value})});$('task-input').value='';note('キューに保存しました（未実行）');await refresh()}catch(e){note(e.message)}});
 document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('[data-tab]').forEach(x=>x.classList.toggle('primary',x===b));['chat','queue','activity'].forEach(t=>$('tab-'+t).classList.toggle('hidden',t!==b.dataset.tab))}));
 if(token){connected=true;refresh()}setInterval(refresh,5000);
@@ -176,6 +195,39 @@ def add_task(title: str, priority: str = "normal") -> dict:
         return task
 
 
+def add_tasks(items: list[dict]) -> list[dict]:
+    """Validate and persist a user-approved plan as queued tasks, atomically."""
+    if not isinstance(items, list) or not 1 <= len(items) <= 8:
+        raise ValueError("tasks must contain 1-8 items")
+    prepared = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("each task must be an object")
+        title = " ".join(str(item.get("title", "")).split())
+        priority = item.get("priority", "normal")
+        if not title or len(title) > 1000:
+            raise ValueError("title must contain 1-1000 characters")
+        if priority not in ("low", "normal", "high"):
+            priority = "normal"
+        prepared.append((title, priority))
+    with TASK_LOCK:
+        tasks = load_tasks()
+        if len(tasks) + len(prepared) > MAX_TASKS:
+            raise ValueError("task queue is full")
+        created = []
+        for title, priority in prepared:
+            created.append({
+                "id": uuid.uuid4().hex,
+                "title": title,
+                "priority": priority,
+                "status": "queued",
+                "created_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+            })
+        tasks.extend(created)
+        save_tasks(tasks)
+        return created
+
+
 def delete_task(task_id: str) -> bool:
     with TASK_LOCK:
         tasks = load_tasks()
@@ -227,6 +279,68 @@ def bonsai_chat(message: str) -> str:
         return str(data["choices"][0]["message"]["content"]).strip()
     except (KeyError, IndexError, TypeError) as exc:
         raise RuntimeError("Bonsai API response did not contain a chat reply") from exc
+
+
+def bonsai_plan(goal: str) -> dict:
+    """Ask Bonsai for a bounded JSON plan; planning never executes the tasks."""
+    goal = str(goal).strip()
+    if not goal or len(goal) > 2000:
+        raise ValueError("goal must contain 1-2000 characters")
+    system = (
+        "You are the planning coordinator for Local Engineer. Answer in Japanese. "
+        "Create a safe, practical sequence of at most 8 small tasks for the user's goal. "
+        "Do not claim to have inspected files or performed work. Start with inspection, "
+        "then hypothesis, implementation, tests, verification and diff review as appropriate. "
+        "Do not propose commits, pushes, secret access, or destructive actions. "
+        "Return ONLY a JSON object with this schema: "
+        '{"summary":"short Japanese summary","steps":[{"title":"one actionable task","priority":"normal"}]}. '
+        "Each step priority must be low, normal, or high. Include 1 to 8 steps."
+    )
+    payload = {
+        "model": _chat_model(),
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": goal}],
+        "temperature": 0.2,
+        "max_tokens": 1000,
+        "stream": False,
+    }
+    request = urllib.request.Request(
+        API_BASE.rstrip("/") + "/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            data = json.loads(response.read(2_000_000).decode("utf-8"))
+        content = data["choices"][0]["message"]["content"]
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError("Bonsai plan request failed or returned an invalid response") from exc
+    if not isinstance(content, str):
+        raise RuntimeError("Bonsai did not return a text plan")
+    start, end = content.find("{"), content.rfind("}")
+    if start < 0 or end <= start:
+        raise RuntimeError("Bonsai plan was not valid JSON; try a shorter goal")
+    try:
+        parsed = json.loads(content[start:end + 1])
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Bonsai plan was not valid JSON; try again") from exc
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("steps"), list):
+        raise RuntimeError("Bonsai plan must contain a steps array")
+    summary = " ".join(str(parsed.get("summary", "作業計画")).split())[:500]
+    steps = []
+    for item in parsed["steps"][:8]:
+        if not isinstance(item, dict):
+            continue
+        title = " ".join(str(item.get("title", "")).split())
+        if not title:
+            continue
+        steps.append({
+            "title": title[:500],
+            "priority": item.get("priority") if item.get("priority") in ("low", "normal", "high") else "normal",
+        })
+    if not steps:
+        raise RuntimeError("Bonsai plan did not contain any usable steps")
+    return {"summary": summary or "作業計画", "steps": steps}
 
 
 def _chat_model() -> str:
@@ -409,6 +523,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/tasks":
                 task = add_task(body.get("title", ""), body.get("priority", "normal"))
                 self._send_json({"task": task}, 201)
+            elif path == "/api/plan":
+                plan = bonsai_plan(body.get("goal", ""))
+                self._send_json({"plan": plan})
+            elif path == "/api/tasks/batch":
+                created = add_tasks(body.get("tasks", []))
+                self._send_json({"tasks": created}, 201)
             elif path == "/api/chat":
                 reply = bonsai_chat(body.get("message", ""))
                 self._send_json({"reply": reply})
