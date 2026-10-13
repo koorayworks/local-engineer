@@ -341,7 +341,7 @@ def bonsai_plan(goal: str, request_id: str | None = None) -> dict:
         "model": _chat_model(),
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": goal}],
         "temperature": 0.2,
-        "max_tokens": 1000,
+        "max_tokens": 2200,
         "stream": False,
     }
     request = urllib.request.Request(
@@ -351,7 +351,9 @@ def bonsai_plan(goal: str, request_id: str | None = None) -> dict:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=120) as response:
+        # Non-streaming inference returns only after the complete plan is generated.
+        # Allow enough time for Bonsai on local hardware to finish a structured plan.
+        with urllib.request.urlopen(request, timeout=300) as response:
             if request_id:
                 with PLAN_LOCK:
                     state = ACTIVE_PLANS.get(request_id)
@@ -367,7 +369,10 @@ def bonsai_plan(goal: str, request_id: str | None = None) -> dict:
                 state = ACTIVE_PLANS.get(request_id)
                 if state is None or state["cancelled"].is_set():
                     raise RuntimeError("plan generation cancelled")
-        content = data["choices"][0]["message"]["content"]
+        choice = data["choices"][0]
+        if choice.get("finish_reason") == "length":
+            raise RuntimeError("Bonsaiの計画出力が上限で途切れました。もう一度試すか、目標を短くしてください")
+        content = choice["message"]["content"]
     except RuntimeError:
         raise
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError, IndexError, TypeError, OSError, ValueError) as exc:
