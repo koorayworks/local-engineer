@@ -421,19 +421,21 @@ def bonsai_stream(message: str, request_id: str | None = None):
             if request_id:
                 with STREAM_LOCK:
                     state = ACTIVE_STREAMS.get(request_id)
+                    cancelled = state is None or state["cancelled"].is_set()
                     if state is not None:
                         state["response"] = response
-                        if state["cancelled"].is_set():
-                            response.close()
-                            yield {"cancelled": True}
-                            return
+                if cancelled:
+                    response.close()
+                    yield {"cancelled": True}
+                    return
             while True:
                 if request_id:
                     with STREAM_LOCK:
                         state = ACTIVE_STREAMS.get(request_id)
-                        if state is None or state["cancelled"].is_set():
-                            yield {"cancelled": True}
-                            return
+                        cancelled = state is None or state["cancelled"].is_set()
+                    if cancelled:
+                        yield {"cancelled": True}
+                        return
                 raw_line = response.readline()
                 if not raw_line:
                     break
