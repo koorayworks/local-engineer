@@ -391,6 +391,11 @@ def bonsai_plan(goal: str, request_id: str | None = None) -> dict:
         })
     if not steps:
         raise RuntimeError("Bonsai plan did not contain any usable steps")
+    if request_id:
+        with PLAN_LOCK:
+            state = ACTIVE_PLANS.get(request_id)
+            if state is None or state["cancelled"].is_set():
+                raise RuntimeError("plan generation cancelled")
     return {"summary": summary or "作業計画", "steps": steps}
 
 
