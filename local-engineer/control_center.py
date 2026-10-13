@@ -475,12 +475,14 @@ def bonsai_stream(message: str, request_id: str | None = None):
             suffix = "（" + "、".join(details) + "）" if details else ""
             yield {"error": "Bonsaiから表示可能な回答本文が返りませんでした" + suffix + "。reasoning_contentは表示していません。"}
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError, ValueError) as exc:
+        cancelled = False
         if request_id:
             with STREAM_LOCK:
                 state = ACTIVE_STREAMS.get(request_id)
-                if state is not None and state["cancelled"].is_set():
-                    yield {"cancelled": True}
-                    return
+                cancelled = state is not None and state["cancelled"].is_set()
+        if cancelled:
+            yield {"cancelled": True}
+            return
         yield {"error": "Bonsai APIとの通信に失敗しました: " + str(exc)[:240]}
 
 
