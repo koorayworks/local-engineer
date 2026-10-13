@@ -104,7 +104,7 @@ const $=id=>document.getElementById(id);let token=sessionStorage.getItem('le-tok
 $('token').value=token;
 function api(path,opts={}){opts.headers=Object.assign({'Authorization':'Bearer '+token},opts.headers||{});return fetch(path,opts).then(async r=>{const d=await r.json().catch(()=>({error:'invalid response'}));if(!r.ok)throw new Error(d.error||('HTTP '+r.status));return d})}
 function note(s){$('notice').textContent=s}
-function addMsg(role,text){const el=document.createElement('div');el.className='msg '+role;const who=document.createElement('div');who.className='who';who.textContent=role==='user'?'あなた':'Bonsai 27B';const body=document.createElement('div');body.textContent=text;el.append(who,body);$('feed').append(el);$('feed').scrollTop=$('feed').scrollHeight}
+function addMsg(role,text){const el=document.createElement('div');el.className='msg '+role;const who=document.createElement('div');who.className='who';who.textContent=role==='user'?'あなた':'Bonsai 27B';const body=document.createElement('div');body.textContent=text;el.append(who,body);$('feed').append(el);$('feed').scrollTop=$('feed').scrollHeight;return body}
 function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 async function refresh(){
  if(!connected)return;
@@ -118,7 +118,7 @@ function renderTasks(tasks){const box=$('tasks');box.replaceChildren();if(!tasks
  tasks.slice().reverse().forEach(t=>{const el=document.createElement('div');el.className='task';const row=document.createElement('div');row.className='row';const name=document.createElement('div');name.className='task-name';name.style.flex='1';name.textContent=t.title;const tag=document.createElement('span');tag.className='tag';tag.textContent=t.status;row.append(name,tag);const meta=document.createElement('div');meta.className='task-meta';meta.textContent='優先度: '+t.priority+' · '+t.created_at+' · '+t.id.slice(0,8);const del=document.createElement('button');del.textContent='削除';del.style.marginTop='8px';del.addEventListener('click',async()=>{try{await api('/api/tasks/'+encodeURIComponent(t.id),{method:'DELETE'});note('タスクを削除しました');refresh()}catch(e){note(e.message)}});el.append(row,meta,del);box.append(el)})
 }
 $('connect').addEventListener('click',async()=>{token=$('token').value.trim();if(!token){note('トークンを入力してください');return}sessionStorage.setItem('le-token',token);connected=true;try{const s=await api('/api/status');note('接続しました');$('bonsai').textContent=s.bonsai?'API接続OK':'API未確認';await refresh()}catch(e){connected=false;note('接続できません: '+e.message)}});
-$('send').addEventListener('click',async()=>{const text=$('chat-input').value.trim();if(!text)return;if(!connected){note('先に接続してください');return}addMsg('user',text);$('chat-input').value='';$('send').disabled=true;try{const d=await api('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text})});addMsg('ai',d.reply||'(応答なし)')}catch(e){addMsg('ai','エラー: '+e.message);note(e.message)}finally{$('send').disabled=false}});
+$('send').addEventListener('click',async()=>{const text=$('chat-input').value.trim();if(!text)return;if(!connected){note('先に接続してください');return}addMsg('user',text);$('chat-input').value='';$('send').disabled=true;const answer=addMsg('ai','考えています…');let received=false;try{const r=await fetch('/api/chat/stream',{method:'POST',headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({message:text})});if(!r.ok){const d=await r.json().catch(()=>({error:'HTTP '+r.status}));throw new Error(d.error||('HTTP '+r.status))}if(!r.body)throw new Error('このブラウザはストリーミング表示に対応していません');const reader=r.body.getReader();const decoder=new TextDecoder();let pending='';while(true){const part=await reader.read();pending+=decoder.decode(part.value||new Uint8Array(),{stream:!part.done});const rows=pending.split('\\n');pending=rows.pop()||'';for(const row of rows){if(!row.trim())continue;const item=JSON.parse(row);if(item.delta){if(!received){answer.textContent='';received=true}answer.textContent+=item.delta;$('feed').scrollTop=$('feed').scrollHeight}if(item.error)throw new Error(item.error)}if(part.done)break}if(pending.trim()){const item=JSON.parse(pending);if(item.delta){if(!received)answer.textContent='';received=true;answer.textContent+=item.delta}if(item.error)throw new Error(item.error)}if(!received)answer.textContent='回答を受信できませんでした（空の応答）'}catch(e){answer.textContent='エラー: '+e.message;note(e.message)}finally{$('send').disabled=false}});
 $('chat-input').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey))$('send').click()});
 $('add-task').addEventListener('click',async()=>{const title=$('task-input').value.trim();if(!title){$('task-input').focus();return}if(!connected){note('先に接続してください');return}try{await api('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title,priority:$('priority').value})});$('task-input').value='';note('キューに保存しました（未実行）');await refresh()}catch(e){note(e.message)}});
 document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('[data-tab]').forEach(x=>x.classList.toggle('primary',x===b));['chat','queue','activity'].forEach(t=>$('tab-'+t).classList.toggle('hidden',t!==b.dataset.tab))}));
@@ -205,32 +205,9 @@ def bonsai_chat(message: str) -> str:
     message = str(message).strip()
     if not message or len(message) > 4000:
         raise ValueError("message must contain 1-4000 characters")
-    model = os.environ.get("BONSAI_MODEL", "").strip()
-    if not model:
-        models_request = urllib.request.Request(API_BASE.rstrip("/") + "/models", method="GET")
-        try:
-            with urllib.request.urlopen(models_request, timeout=5) as response:
-                models_data = json.loads(response.read(500_000).decode("utf-8"))
-            available = models_data.get("data", [])
-            model = str(available[0].get("id", "")) if available else ""
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, AttributeError, TypeError):
-            model = ""
-    if not model:
-        model = "bonsai"
     payload = {
-        "model": model,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are the planning-only chat assistant inside Local Engineer Control Center. "
-                    "Answer in Japanese unless asked otherwise. Help reason about software/firmware tasks. "
-                    "You have no tools and cannot inspect or edit files, run builds, or execute queued tasks. "
-                    "Never claim you performed an action or verified hardware."
-                ),
-            },
-            {"role": "user", "content": message},
-        ],
+        "model": _chat_model(),
+        "messages": _chat_messages(message),
         "temperature": 0.2,
         "max_tokens": 700,
         "stream": False,
@@ -250,6 +227,83 @@ def bonsai_chat(message: str) -> str:
         return str(data["choices"][0]["message"]["content"]).strip()
     except (KeyError, IndexError, TypeError) as exc:
         raise RuntimeError("Bonsai API response did not contain a chat reply") from exc
+
+
+def _chat_model() -> str:
+    model = os.environ.get("BONSAI_MODEL", "").strip()
+    if model:
+        return model
+    models_request = urllib.request.Request(API_BASE.rstrip("/") + "/models", method="GET")
+    try:
+        with urllib.request.urlopen(models_request, timeout=5) as response:
+            models_data = json.loads(response.read(500_000).decode("utf-8"))
+        available = models_data.get("data", [])
+        return str(available[0].get("id", "")) if available else "bonsai"
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, AttributeError, TypeError):
+        return "bonsai"
+
+
+def _chat_messages(message: str) -> list[dict]:
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are the planning-only chat assistant inside Local Engineer Control Center. "
+                "Answer in Japanese unless asked otherwise. Help reason about software/firmware tasks. "
+                "You have no tools and cannot inspect or edit files, run builds, or execute queued tasks. "
+                "Never claim you performed an action or verified hardware."
+            ),
+        },
+        {"role": "user", "content": message},
+    ]
+
+
+def bonsai_stream(message: str):
+    """Yield visible answer deltas or a safe diagnostic error; never expose reasoning_content."""
+    message = str(message).strip()
+    if not message or len(message) > 4000:
+        raise ValueError("message must contain 1-4000 characters")
+    payload = {
+        "model": _chat_model(),
+        "messages": _chat_messages(message),
+        "temperature": 0.2,
+        "max_tokens": 700,
+        "stream": True,
+    }
+    request = urllib.request.Request(
+        API_BASE.rstrip("/") + "/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Accept": "text/event-stream"},
+        method="POST",
+    )
+    received = False
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            while True:
+                raw_line = response.readline()
+                if not raw_line:
+                    break
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                event_data = line[5:].strip()
+                if event_data == "[DONE]":
+                    break
+                try:
+                    event = json.loads(event_data)
+                except json.JSONDecodeError:
+                    continue
+                choices = event.get("choices") or []
+                if not choices:
+                    continue
+                delta = (choices[0].get("delta") or {}).get("content")
+                if isinstance(delta, str) and delta:
+                    received = True
+                    yield {"delta": delta}
+        if not received:
+            yield {"error": "Bonsaiから空の回答が返りました。APIのfinish_reasonとusageを確認してください。"}
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
+        yield {"error": "Bonsai APIとの通信に失敗しました: " + str(exc)[:240]}
 
 
 def current_status() -> dict:
@@ -339,6 +393,20 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/chat":
                 reply = bonsai_chat(body.get("message", ""))
                 self._send_json({"reply": reply})
+            elif path == "/api/chat/stream":
+                message = str(body.get("message", "")).strip()
+                if not message or len(message) > 4000:
+                    raise ValueError("message must contain 1-4000 characters")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache, no-transform")
+                self.send_header("X-Accel-Buffering", "no")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                for item in bonsai_stream(message):
+                    self.wfile.write((json.dumps(item, ensure_ascii=False) + "\\n").encode("utf-8"))
+                    self.wfile.flush()
+                self.close_connection = True
             else:
                 self._send_json({"error": "not found"}, 404)
         except ValueError as exc:
