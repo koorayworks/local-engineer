@@ -87,8 +87,8 @@ class ControlCenterQueueTests(unittest.TestCase):
                 return next(self.lines, b"")
 
         events = [
-            'data: {"choices":[{"delta":{"content":"こんにちは"}}]}\\n'.encode("utf-8"),
-            'data: {"choices":[{"delta":{"content":"！"}}]}\\n'.encode("utf-8"),
+            'data: {"choices":[{"delta":{"content":"こんにちは"}}]}'.encode("utf-8") + bytes([10]),
+            'data: {"choices":[{"delta":{"content":"！"}}]}'.encode("utf-8") + bytes([10]),
             b'data: [DONE]\n',
         ]
         with patch.dict("os.environ", {"BONSAI_MODEL": "local-bonsai-27b"}):
@@ -104,8 +104,8 @@ class ControlCenterQueueTests(unittest.TestCase):
         class FakeResponse:
             def __init__(self):
                 self.lines = iter([
-                    'data: {"choices":[{"delta":{"reasoning_content":"private reasoning"},"finish_reason":"stop"}]}\\n'.encode("utf-8"),
-                    'data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":4,"total_tokens":16}}\\n'.encode("utf-8"),
+                    'data: {"choices":[{"delta":{"reasoning_content":"private reasoning"},"finish_reason":"stop"}]}'.encode("utf-8") + bytes([10]),
+                    'data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":4,"total_tokens":16}}'.encode("utf-8") + bytes([10]),
                 ])
             def __enter__(self):
                 return self
