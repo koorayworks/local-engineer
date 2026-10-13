@@ -149,7 +149,7 @@ $('cancel-chat').addEventListener('click',async()=>{
  current.controller.abort();$('cancel-chat').disabled=false;
 });
 $('chat-input').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey))$('send').click()});
-let proposedPlan=null;
+let proposedPlan=null;let planRequest=null;
 $('propose-plan').addEventListener('click',async()=>{
  const goal=$('plan-goal').value.trim();if(!goal){$('plan-goal').focus();return}
  if(!connected){note('先に接続してください');return}
