@@ -74,6 +74,51 @@ class ControlCenterQueueTests(unittest.TestCase):
         self.assertIn("cannot inspect or edit files", payload["messages"][0]["content"])
         self.assertEqual(payload["messages"][1]["content"], "WS2812の設計で確認することは？")
 
+    def test_chat_stream_emits_content_deltas_and_uses_streaming_api(self):
+        class FakeResponse:
+            status = 200
+            def __init__(self, lines):
+                self.lines = iter(lines)
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def readline(self):
+                return next(self.lines, b"")
+
+        events = [
+            b'data: {"choices":[{"delta":{"content":"こんにちは"}}]}\\n',
+            b'data: {"choices":[{"delta":{"content":"！"}}]}\\n',
+            b'data: [DONE]\\n',
+        ]
+        with patch.dict("os.environ", {"BONSAI_MODEL": "local-bonsai-27b"}):
+            with patch.object(cc.urllib.request, "urlopen", return_value=FakeResponse(events)) as urlopen:
+                result = list(cc.bonsai_stream("テスト"))
+        self.assertEqual(result, [{"delta": "こんにちは"}, {"delta": "！"}])
+        request = urlopen.call_args.args[0]
+        payload = json.loads(request.data.decode())
+        self.assertTrue(payload["stream"])
+        self.assertEqual(payload["model"], "local-bonsai-27b")
+
+    def test_chat_stream_reports_empty_content_without_exposing_reasoning(self):
+        class FakeResponse:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def readline(self):
+                if hasattr(self, "done"):
+                    return b""
+                self.done = True
+                return b'data: {"choices":[{"delta":{"reasoning_content":"private reasoning"}}]}\\n'
+
+        with patch.dict("os.environ", {"BONSAI_MODEL": "local-bonsai-27b"}):
+            with patch.object(cc.urllib.request, "urlopen", return_value=FakeResponse()):
+                result = list(cc.bonsai_stream("テスト"))
+        self.assertEqual(len(result), 1)
+        self.assertIn("error", result[0])
+        self.assertNotIn("private reasoning", json.dumps(result, ensure_ascii=False))
+
     def test_chat_rejects_empty_and_oversized_messages(self):
         with self.assertRaises(ValueError):
             cc.bonsai_chat(" ")
