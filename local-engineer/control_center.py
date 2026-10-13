@@ -154,8 +154,9 @@ $('propose-plan').addEventListener('click',async()=>{
  const goal=$('plan-goal').value.trim();if(!goal){$('plan-goal').focus();return}
  if(!connected){note('先に接続してください');return}
  const btn=$('propose-plan');btn.disabled=true;btn.textContent='計画中…';$('plan-preview').replaceChildren();note('Bonsaiに計画を依頼しています…');
+ const requestId=crypto.randomUUID();const controller=new AbortController();planRequest={requestId,controller};const cancel=$('cancel-plan');cancel.classList.remove('hidden');
  try{
-  const data=await api('/api/plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({goal})});
+  const data=await api('/api/plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({goal,request_id:requestId}),signal:controller.signal});
   proposedPlan=data.plan;const box=$('plan-preview');const summary=document.createElement('div');summary.className='msg ai';summary.textContent=proposedPlan.summary;box.append(summary);
   const list=document.createElement('ol');for(const step of proposedPlan.steps){const li=document.createElement('li');li.style.margin='8px 0';li.textContent=step.title+'（'+step.priority+'）';list.append(li)}box.append(list);
   const approve=document.createElement('button');approve.className='primary';approve.textContent='この計画をキューに登録';approve.addEventListener('click',async()=>{
