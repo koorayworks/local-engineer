@@ -157,6 +157,36 @@ class ControlCenterQueueTests(unittest.TestCase):
             cc.add_tasks([{"title": "valid"}, {"title": ""}])
         self.assertEqual(cc.load_tasks(), tasks)
 
+    def test_chat_stream_stops_when_consultation_was_cancelled(self):
+        import threading
+
+        class FakeResponse:
+            def __init__(self):
+                self.closed = False
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def close(self):
+                self.closed = True
+            def readline(self):
+                raise AssertionError("cancelled stream must not read upstream")
+
+        response = FakeResponse()
+        event = threading.Event()
+        event.set()
+        with cc.STREAM_LOCK:
+            cc.ACTIVE_STREAMS["cancel-test"] = {"cancelled": event, "response": None}
+        try:
+            with patch.dict("os.environ", {"BONSAI_MODEL": "local-bonsai-27b"}):
+                with patch.object(cc.urllib.request, "urlopen", return_value=response):
+                    result = list(cc.bonsai_stream("テスト", request_id="cancel-test"))
+            self.assertEqual(result, [{"cancelled": True}])
+            self.assertTrue(response.closed)
+        finally:
+            with cc.STREAM_LOCK:
+                cc.ACTIVE_STREAMS.pop("cancel-test", None)
+
     def test_chat_rejects_empty_and_oversized_messages(self):
         with self.assertRaises(ValueError):
             cc.bonsai_chat(" ")
