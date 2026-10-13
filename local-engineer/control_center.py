@@ -93,7 +93,7 @@ textarea{resize:vertical;min-height:85px}.row{display:flex;gap:8px;align-items:c
 <section class="panel" id="tab-queue"><div class="section-title">指示キュー <span class="tag">実行待ち</span></div>
 <div class="section-title" style="margin-top:4px">Bonsaiに作業計画を提案してもらう</div>
 <textarea id="plan-goal" placeholder="例：RMK版PG1KBの現状を調べ、次に必要な作業を段階的に整理して"></textarea>
-<div class="row" style="margin-top:8px"><button id="propose-plan" class="primary">計画を作成</button><span class="muted">提案だけでは実行されません</span></div>
+<div class="row" style="margin-top:8px"><button id="propose-plan" class="primary">計画を作成</button><button id="cancel-plan" class="hidden">計画生成を中断</button><span class="muted">提案だけでは実行されません</span></div>
 <div id="plan-preview" style="margin:10px 0"></div>
 <div class="section-title" style="margin-top:18px">手動でタスクを追加</div>
 <textarea id="task-input" placeholder="キューに登録する作業を具体的に記入"></textarea>
