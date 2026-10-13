@@ -14,12 +14,15 @@ class ControlCenterQueueTests(unittest.TestCase):
         self.root = pathlib.Path(self.temp.name)
         self.control_dir_patch = patch.object(cc, "CONTROL_DIR", self.root / "control-center")
         self.tasks_path_patch = patch.object(cc, "TASKS_PATH", self.root / "control-center" / "tasks.json")
+        self.token_path_patch = patch.object(cc, "TOKEN_PATH", self.root / "control-center" / "auth.token")
         self.control_dir_patch.start()
         self.tasks_path_patch.start()
+        self.token_path_patch.start()
 
     def tearDown(self):
         self.control_dir_patch.stop()
         self.tasks_path_patch.stop()
+        self.token_path_patch.stop()
         self.temp.cleanup()
 
     def test_task_persists_and_can_be_deleted(self):
@@ -45,25 +48,29 @@ class ControlCenterQueueTests(unittest.TestCase):
         self.assertEqual((self.root / "control-center" / "auth.token").read_text().strip(), token)
 
     def test_chat_sends_planning_only_prompt_to_configured_api(self):
-        response = {
-            "choices": [{"message": {"content": "まずタイマーとDMAの対応表を確認します。"}}]
-        }
+        responses = [
+            {"data": [{"id": "local-bonsai-27b"}]},
+            {"choices": [{"message": {"content": "まずタイマーとDMAの対応表を確認します。"}}]},
+        ]
 
         class FakeResponse:
             status = 200
+            def __init__(self, value):
+                self.value = value
             def __enter__(self):
                 return self
             def __exit__(self, *args):
                 return False
             def read(self, _limit):
-                return json.dumps(response).encode()
+                return json.dumps(self.value).encode()
 
-        with patch.object(cc.urllib.request, "urlopen", return_value=FakeResponse()) as urlopen:
+        with patch.object(cc.urllib.request, "urlopen", side_effect=[FakeResponse(x) for x in responses]) as urlopen:
             answer = cc.bonsai_chat("WS2812の設計で確認することは？")
         self.assertIn("タイマー", answer)
-        req = urlopen.call_args.args[0]
+        req = urlopen.call_args_list[1].args[0]
         payload = json.loads(req.data.decode())
         self.assertEqual(req.full_url, cc.API_BASE.rstrip("/") + "/chat/completions")
+        self.assertEqual(payload["model"], "local-bonsai-27b")
         self.assertIn("cannot inspect or edit files", payload["messages"][0]["content"])
         self.assertEqual(payload["messages"][1]["content"], "WS2812の設計で確認することは？")
 
