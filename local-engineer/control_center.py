@@ -162,7 +162,12 @@ $('propose-plan').addEventListener('click',async()=>{
   const approve=document.createElement('button');approve.className='primary';approve.textContent='この計画をキューに登録';approve.addEventListener('click',async()=>{
    approve.disabled=true;try{const saved=await api('/api/tasks/batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tasks:proposedPlan.steps})});note(saved.tasks.length+'件をキューに登録しました（未実行）');proposedPlan=null;box.replaceChildren();await refresh()}catch(e){note('登録できません: '+e.message);approve.disabled=false}
   });box.append(approve);note('計画案ができました。内容を確認してから登録してください。');
- }catch(e){note('計画を作成できません: '+e.message)}finally{btn.disabled=false;btn.textContent='計画を作成'}
+ }catch(e){if(e.name==='AbortError'){note('計画生成を中断しました');$('plan-preview').replaceChildren();proposedPlan=null}else{note('計画を作成できません: '+e.message)}}finally{if(planRequest&&planRequest.requestId===requestId)planRequest=null;btn.disabled=false;btn.textContent='計画を作成';cancel.classList.add('hidden')}
+});
+$('cancel-plan').addEventListener('click',async()=>{
+ if(!planRequest)return;const current=planRequest;$('cancel-plan').disabled=true;
+ try{await api('/api/plan/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({request_id:current.requestId})})}catch(e){note('計画の中断要求を送信しました。'+e.message)}
+ current.controller.abort();$('cancel-plan').disabled=false;
 });
 $('add-task').addEventListener('click',async()=>{const title=$('task-input').value.trim();if(!title){$('task-input').focus();return}if(!connected){note('先に接続してください');return}try{await api('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title,priority:$('priority').value})});$('task-input').value='';note('キューに保存しました（未実行）');await refresh()}catch(e){note(e.message)}});
 document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('[data-tab]').forEach(x=>x.classList.toggle('primary',x===b));['chat','queue','activity'].forEach(t=>$('tab-'+t).classList.toggle('hidden',t!==b.dataset.tab))}));
