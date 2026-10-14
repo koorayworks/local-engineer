@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Local Engineer Control Center prototype.
 
-Local-first web UI for read-only session monitoring, direct Bonsai chat, and a
-persistent instruction queue. Queue items are intentionally NOT executed yet.
+Local-first web UI for session monitoring, local-model chat, and a persistent
+instruction queue with explicit user-approved task execution.
 Bind to loopback by default. API endpoints require a bearer token.
 """
 from __future__ import annotations
@@ -160,7 +160,7 @@ let proposedPlan=null;let planRequest=null;
 $('propose-plan').addEventListener('click',async()=>{
  const goal=$('plan-goal').value.trim();if(!goal){$('plan-goal').focus();return}
  if(!connected){note('先に接続してください');return}
- const btn=$('propose-plan');btn.disabled=true;btn.textContent='計画中…';$('plan-preview').replaceChildren();note('Bonsaiに計画を依頼しています…');
+ const btn=$('propose-plan');btn.disabled=true;btn.textContent='計画中…';$('plan-preview').replaceChildren();note('設定済みのローカルAIに計画を依頼しています…');
  const requestId=crypto.randomUUID();const controller=new AbortController();planRequest={requestId,controller};const cancel=$('cancel-plan');cancel.classList.remove('hidden');
  try{
   const data=await api('/api/plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({goal,request_id:requestId}),signal:controller.signal});
@@ -437,11 +437,11 @@ def bonsai_chat(message: str) -> str:
         with urllib.request.urlopen(request, timeout=120) as response:
             data = json.loads(response.read(2_000_000).decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-        raise RuntimeError("Bonsai API unavailable or returned invalid data") from exc
+        raise RuntimeError("ローカルAI APIに接続できないか、応答形式が不正です") from exc
     try:
         return str(data["choices"][0]["message"]["content"]).strip()
     except (KeyError, IndexError, TypeError) as exc:
-        raise RuntimeError("Bonsai API response did not contain a chat reply") from exc
+        raise RuntimeError("ローカルAI APIの応答にチャット本文がありません") from exc
 
 
 def bonsai_plan(goal: str, request_id: str | None = None) -> dict:
@@ -499,7 +499,7 @@ def bonsai_plan(goal: str, request_id: str | None = None) -> dict:
                     raise RuntimeError("plan generation cancelled")
         choice = data["choices"][0]
         if choice.get("finish_reason") == "length":
-            raise RuntimeError("Bonsaiの計画出力が上限で途切れました。もう一度試すか、目標を短くしてください")
+            raise RuntimeError("計画出力が上限で途切れました。目標を短くして再試行してください")
         content = choice["message"]["content"]
     except RuntimeError:
         raise
@@ -509,18 +509,18 @@ def bonsai_plan(goal: str, request_id: str | None = None) -> dict:
                 state = ACTIVE_PLANS.get(request_id)
                 if state is not None and state["cancelled"].is_set():
                     raise RuntimeError("plan generation cancelled") from exc
-        raise RuntimeError("Bonsai plan request failed or returned an invalid response") from exc
+        raise RuntimeError("ローカルAIの計画要求が失敗したか、応答形式が不正です") from exc
     if not isinstance(content, str):
-        raise RuntimeError("Bonsai did not return a text plan")
+        raise RuntimeError("ローカルAIがテキスト形式の計画を返しませんでした")
     start, end = content.find("{"), content.rfind("}")
     if start < 0 or end <= start:
         raise RuntimeError("Bonsai plan was not valid JSON; try a shorter goal")
     try:
         parsed = json.loads(content[start:end + 1])
     except json.JSONDecodeError as exc:
-        raise RuntimeError("Bonsai plan was not valid JSON; try again") from exc
+        raise RuntimeError("計画が有効なJSONではありません。再試行してください") from exc
     if not isinstance(parsed, dict) or not isinstance(parsed.get("steps"), list):
-        raise RuntimeError("Bonsai plan must contain a steps array")
+        raise RuntimeError("計画にsteps配列がありません")
     summary = " ".join(str(parsed.get("summary", "作業計画")).split())[:500]
     steps = []
     for item in parsed["steps"][:8]:
@@ -539,7 +539,7 @@ def bonsai_plan(goal: str, request_id: str | None = None) -> dict:
                 step[field] = value[:1000]
         steps.append(step)
     if not steps:
-        raise RuntimeError("Bonsai plan did not contain any usable steps")
+        raise RuntimeError("計画に有効なステップがありません")
     if request_id:
         with PLAN_LOCK:
             state = ACTIVE_PLANS.get(request_id)
@@ -563,14 +563,22 @@ def _chat_model() -> str:
 
 
 def _chat_messages(message: str) -> list[dict]:
+    model_id = _chat_model()
     return [
         {
             "role": "system",
             "content": (
-                "You are the planning-only chat assistant inside Local Engineer Control Center. "
-                "Answer in Japanese unless asked otherwise. Help reason about software/firmware tasks. "
-                "You have no tools and cannot inspect or edit files, run builds, or execute queued tasks. "
-                "Never claim you performed an action or verified hardware."
+                "You are the Japanese technical assistant in Local Engineer Control Center. "
+                "The model ID selected by the server configuration is: " + model_id + ". "
+                "If asked which model is configured, answer with that exact ID; do not ask the user to tell you. "
+                "Answer the user's actual question directly and usefully. Do not merely repeat or rephrase "
+                "the user's request, and do not respond by asking the same question back. "
+                "If the request is ambiguous, make a reasonable safe assumption and state it briefly; "
+                "ask a follow-up only when a missing detail is essential. "
+                "Use concise, natural Japanese unless asked otherwise. For software and firmware topics, "
+                "give concrete next steps and explain important trade-offs. Clearly separate known facts "
+                "from assumptions. You have no tools and cannot inspect or edit files, run builds, or execute "
+                "queued tasks from this chat. Never claim you performed an action or verified hardware."
             ),
         },
         {"role": "user", "content": message},
@@ -656,7 +664,7 @@ def bonsai_stream(message: str, request_id: str | None = None):
                 if tokens:
                     details.append("usage: " + tokens)
             suffix = "（" + "、".join(details) + "）" if details else ""
-            yield {"error": "Bonsaiから表示可能な回答本文が返りませんでした" + suffix + "。reasoning_contentは表示していません。"}
+            yield {"error": "ローカルAIから表示可能な回答本文が返りませんでした" + suffix + "。内部推論は表示していません。"}
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError, ValueError) as exc:
         cancelled = False
         if request_id:
@@ -666,7 +674,7 @@ def bonsai_stream(message: str, request_id: str | None = None):
         if cancelled:
             yield {"cancelled": True}
             return
-        yield {"error": "Bonsai APIとの通信に失敗しました: " + str(exc)[:240]}
+        yield {"error": "ローカルAI APIとの通信に失敗しました: " + str(exc)[:240]}
 
 
 def current_status() -> dict:
