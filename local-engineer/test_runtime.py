@@ -738,9 +738,11 @@ class SafetyTests(unittest.TestCase):
              patch.object(self.project,'build',return_value=(0,'build ok')), \
              patch.object(self.project,'command',side_effect=lambda *args: next(command_results)):
             self.assertEqual(m.agent(self.project,'repair failing peer selection'),0)
-        state=json.loads(next((m.STATE/'sessions').glob('*/working_state.json')).read_text())
+        session=next((m.STATE/'sessions').glob('*/working_state.json')).parent
+        state=json.loads((session/'working_state.json').read_text())
         self.assertGreaterEqual(state['reflection_calls'],1)
-        self.assertGreaterEqual(state['discovery_after_hypothesis'],5)
+        read_events=sum('"tool": "read_file"' in line for line in (session/'events.jsonl').read_text().splitlines())
+        self.assertEqual(read_events,13)
         self.assertEqual(state['status'],'completed')
         self.assertEqual((self.root/'calc.py').read_text().splitlines()[0],'value = 2')
     def test_hypothesis_gate_prefers_an_edit_after_initial_discovery(self):
