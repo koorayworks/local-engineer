@@ -420,9 +420,10 @@ def bonsai_chat(message: str) -> str:
     message = str(message).strip()
     if not message or len(message) > 4000:
         raise ValueError("message must contain 1-4000 characters")
+    model_id = _chat_model()
     payload = {
-        "model": _chat_model(),
-        "messages": _chat_messages(message),
+        "model": model_id,
+        "messages": _chat_messages(message, model_id),
         "temperature": 0.2,
         "max_tokens": 700,
         "stream": False,
@@ -562,8 +563,8 @@ def _chat_model() -> str:
         return "bonsai"
 
 
-def _chat_messages(message: str) -> list[dict]:
-    model_id = _chat_model()
+def _chat_messages(message: str, model_id: str | None = None) -> list[dict]:
+    model_id = model_id or _chat_model()
     return [
         {
             "role": "system",
@@ -590,9 +591,10 @@ def bonsai_stream(message: str, request_id: str | None = None):
     message = str(message).strip()
     if not message or len(message) > 4000:
         raise ValueError("message must contain 1-4000 characters")
+    model_id = _chat_model()
     payload = {
-        "model": _chat_model(),
-        "messages": _chat_messages(message),
+        "model": model_id,
+        "messages": _chat_messages(message, model_id),
         "temperature": 0.2,
         "max_tokens": 700,
         "stream": True,
