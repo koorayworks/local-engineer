@@ -319,12 +319,17 @@ def _execute_task(task_id: str, project: str, title: str) -> None:
     command = [sys.executable, str(runtime), "ask", project + ": " + title]
     return_code = 1
     try:
+        # Never launch the CLI unless the selected Control Center model endpoint responds.
+        with urllib.request.urlopen(API_BASE.rstrip("/") + "/models", timeout=3):
+            pass
+        child_env = os.environ.copy()
+        child_env["BONSAI_API_BASE"] = API_BASE
         with log_path.open("w", encoding="utf-8") as stream:
             stream.write("$ " + " ".join(command) + "\n\n")
             stream.flush()
             process = subprocess.Popen(
                 command, cwd=str(runtime.parent), stdout=stream,
-                stderr=subprocess.STDOUT, text=True,
+                stderr=subprocess.STDOUT, text=True, env=child_env,
                 start_new_session=(os.name == "posix"),
             )
             with RUN_LOCK:
