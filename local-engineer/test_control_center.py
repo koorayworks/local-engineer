@@ -74,6 +74,13 @@ class ControlCenterQueueTests(unittest.TestCase):
         self.assertIn("cannot inspect or edit files", payload["messages"][0]["content"])
         self.assertEqual(payload["messages"][1]["content"], "WS2812の設計で確認することは？")
 
+    def test_local_engineer_model_override_takes_precedence_over_bonsai(self):
+        with patch.dict("os.environ", {
+            "LOCAL_ENGINEER_MODEL": "qwen2.5-coder:3b",
+            "BONSAI_MODEL": "legacy-bonsai-model",
+        }):
+            self.assertEqual(cc._chat_model(), "qwen2.5-coder:3b")
+
     def test_chat_stream_emits_content_deltas_and_uses_streaming_api(self):
         class FakeResponse:
             status = 200
