@@ -32,6 +32,29 @@ llm logs
 
 Bonsai runs from the existing `~/Bonsai-demo` installation with PQ2_0, Metal, context 8192, text-only mode, and a server-wide reasoning budget of 2048.
 
+## Optional Ollama Qwen backend
+
+The default `local-engineer` command continues to use Bonsai at `127.0.0.1:8080`.
+After installing Ollama and pulling `qwen2.5-coder:3b`, run `./install.sh` again
+to install the separate `local-engineer-qwen` launcher. It checks the Ollama
+OpenAI-compatible API at `127.0.0.1:11434/v1` and opts into non-Bonsai model use
+for that invocation only; it does not stop, reconfigure, or start/stop Bonsai.
+
+Examples:
+
+```bash
+local-engineer-qwen status
+local-engineer-qwen projects
+local-engineer-qwen inspect rmk-pg1kb "Inspect the registered project and relevant source; do not edit"
+```
+
+Ollama does not expose the llama-server `/apply-template` and `/tokenize` endpoints
+used by the Bonsai path. The Qwen launcher therefore uses a conservative byte-based
+token estimate for context budgeting. This estimate is approximate; verify the
+first read-only run before using Qwen for edits or builds. Tool calling depends on
+the selected model's support and must be tested. The default Bonsai path remains strict
+and unchanged.
+
 ## WSL projects
 
 Default SSH alias: `wsl`.
