@@ -30,7 +30,8 @@ STATE = pathlib.Path(os.environ.get(
 CONTROL_DIR = STATE / "control-center"
 TASKS_PATH = CONTROL_DIR / "tasks.json"
 TOKEN_PATH = CONTROL_DIR / "auth.token"
-API_BASE = os.environ.get("BONSAI_API_BASE", "http://127.0.0.1:8080/v1")
+API_BASE = os.environ.get("LOCAL_ENGINEER_API_BASE", os.environ.get("BONSAI_API_BASE", "http://127.0.0.1:8080/v1"))
+MODEL_ID = os.environ.get("LOCAL_ENGINEER_MODEL", os.environ.get("BONSAI_MODEL", "")).strip()
 MAX_BODY = 16_000
 MAX_TASKS = 1000
 TASK_LOCK = threading.Lock()
@@ -77,30 +78,30 @@ textarea{resize:vertical;min-height:85px}.row{display:flex;gap:8px;align-items:c
 </style>
 </head>
 <body><main>
-<header class="head"><div class="logo">LE</div><div><h1>Local Engineer Control Center</h1><div class="sub">ローカル優先 · Bonsai · タスクキュー</div></div><span class="badge">プロトタイプ</span></header>
+<header class="head"><div class="logo">LE</div><div><h1>Local Engineer Control Center</h1><div class="sub">ローカル優先 · ローカルAI · タスクキュー</div></div><span class="badge">プロトタイプ</span></header>
 <section class="panel" id="authbox"><div class="section-title">ローカル接続トークン</div><div class="row"><input id="token" type="password" autocomplete="current-password" placeholder="ターミナルに表示されたトークン"><button id="connect" class="primary">接続</button></div><div class="foot">このトークンはAPI操作の認証に使います。共有端末では保存しないでください。</div><div id="notice"></div></section>
 <section class="grid">
-<div class="stat"><label>AIエンジン</label><strong>Bonsai 27B</strong><div class="sub" id="bonsai">接続確認前</div></div>
+<div class="stat"><label>AIエンジン</label><strong id="engine-name">ローカルAI</strong><div class="sub" id="bonsai">接続確認前</div></div>
 <div class="stat"><label>Local Engineer</label><strong id="session">未取得</strong><div class="sub" id="phase">状態未取得</div></div>
 <div class="stat"><label>ビルド</label><strong id="build">未確認</strong><div class="sub">実際の記録値</div></div>
 <div class="stat"><label>指示キュー</label><strong id="count">未取得</strong><div class="sub">永続保存</div></div>
 </section>
 <nav class="tabs"><button class="primary" data-tab="chat">AIチャット</button><button data-tab="queue">指示キュー</button><button data-tab="activity">イベント</button></nav>
 <div class="two">
-<section class="panel" id="tab-chat"><div class="section-title">Bonsaiに相談 <span class="tag">ローカルAPI</span></div>
-<div class="feed" id="feed"><div class="msg ai"><div class="who">Local Engineer</div>接続後、Bonsaiに技術相談できます。このチャットは相談用で、コード編集やビルドを直接実行しません。</div></div>
+<section class="panel" id="tab-chat"><div class="section-title">ローカルAIに相談 <span class="tag">ローカルAPI</span></div>
+<div class="feed" id="feed"><div class="msg ai"><div class="who">Local Engineer</div>接続後、設定したローカルAIに技術相談できます。このチャットは相談用で、コード編集やビルドを直接実行しません。</div></div>
 <textarea id="chat-input" placeholder="例：STM32F411でWS2812をPWM＋DMA駆動する際の確認事項を整理して"></textarea>
-<div class="row" style="margin-top:8px"><button id="send" class="primary">Bonsaiへ送信</button><button id="cancel-chat" class="hidden">相談を中断</button><span class="muted">相談のみ・編集は行いません</span></div>
+<div class="row" style="margin-top:8px"><button id="send" class="primary">AIへ送信</button><button id="cancel-chat" class="hidden">相談を中断</button><span class="muted">相談のみ・編集は行いません</span></div>
 </section>
 <section class="panel" id="tab-queue"><div class="section-title">指示キュー <span class="tag">実行待ち</span></div>
-<div class="section-title" style="margin-top:4px">Bonsaiに作業計画を提案してもらう</div>
+<div class="section-title" style="margin-top:4px">ローカルAIに作業計画を提案してもらう</div>
 <textarea id="plan-goal" placeholder="例：RMK版PG1KBの現状を調べ、次に必要な作業を段階的に整理して"></textarea>
 <div class="row" style="margin-top:8px"><button id="propose-plan" class="primary">計画を作成</button><button id="cancel-plan" class="hidden">計画生成を中断</button><span class="muted">提案だけでは実行されません</span></div>
 <div id="plan-preview" style="margin:10px 0"></div>
 <div class="section-title" style="margin-top:18px">手動でタスクを追加</div>
 <textarea id="task-input" placeholder="キューに登録する作業を具体的に記入"></textarea>
 <div class="row" style="margin-top:8px"><select id="priority" aria-label="優先度"><option value="normal">通常</option><option value="high">高</option><option value="low">低</option></select><button id="add-task" class="primary">キューに追加</button></div>
-<div class="foot">Bonsaiの計画を確認してからキューに登録できます。キューは保存のみで、実行ランナーはまだ接続されていません。</div>
+<div class="foot">AIの計画を確認してからキューに登録できます。キューは保存のみで、実行ランナーはまだ接続されていません。</div>
 <div id="tasks" style="margin-top:12px"></div>
 </section>
 </div>
@@ -113,12 +114,12 @@ const $=id=>document.getElementById(id);let token=sessionStorage.getItem('le-tok
 $('token').value=token;
 function api(path,opts={}){opts.headers=Object.assign({'Authorization':'Bearer '+token},opts.headers||{});return fetch(path,opts).then(async r=>{const d=await r.json().catch(()=>({error:'invalid response'}));if(!r.ok)throw new Error(d.error||('HTTP '+r.status));return d})}
 function note(s){$('notice').textContent=s}
-function addMsg(role,text){const el=document.createElement('div');el.className='msg '+role;const who=document.createElement('div');who.className='who';who.textContent=role==='user'?'あなた':'Bonsai 27B';const body=document.createElement('div');body.textContent=text;el.append(who,body);$('feed').append(el);$('feed').scrollTop=$('feed').scrollHeight;return body}
+function addMsg(role,text){const el=document.createElement('div');el.className='msg '+role;const who=document.createElement('div');who.className='who';who.textContent=role==='user'?'あなた':'ローカルAI';const body=document.createElement('div');body.textContent=text;el.append(who,body);$('feed').append(el);$('feed').scrollTop=$('feed').scrollHeight;return body}
 function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 async function refresh(){
  if(!connected)return;
  try{
-  const s=await api('/api/status');$('session').textContent=s.session||'セッションなし';$('phase').textContent=(s.status||'不明')+' · '+(s.phase||'');$('build').textContent=s.build_status||'未記録';$('bonsai').textContent=s.bonsai?'API接続OK':'API未確認';
+  const s=await api('/api/status');$('session').textContent=s.session||'セッションなし';$('phase').textContent=(s.status||'不明')+' · '+(s.phase||'');$('build').textContent=s.build_status||'未記録';$('engine-name').textContent=s.model||'ローカルAI';$('bonsai').textContent=s.bonsai?'API接続OK':'API未確認';
   const q=await api('/api/tasks');$('count').textContent=q.tasks.length+'件';renderTasks(q.tasks);
   const ev=await api('/api/events?since='+lastSeq);if(ev.events.length){lastSeq=Math.max(lastSeq,...ev.events.map(e=>e._seq||0));const box=$('events');if(lastSeq===Math.max(...ev.events.map(e=>e._seq||0))&&box.querySelector('.muted'))box.replaceChildren();for(const e of ev.events){const d=document.createElement('div');d.className='log';d.textContent=[e._seq,e.tool||e.type||'event',e.result||e.message||''].filter(Boolean).join(' · ').slice(0,1000);box.append(d)}}
  }catch(e){note('接続エラー: '+e.message)}
@@ -421,9 +422,8 @@ def bonsai_plan(goal: str, request_id: str | None = None) -> dict:
 
 
 def _chat_model() -> str:
-    model = os.environ.get("BONSAI_MODEL", "").strip()
-    if model:
-        return model
+    if MODEL_ID:
+        return MODEL_ID
     models_request = urllib.request.Request(API_BASE.rstrip("/") + "/models", method="GET")
     try:
         with urllib.request.urlopen(models_request, timeout=5) as response:
@@ -545,11 +545,16 @@ def current_status() -> dict:
     session = live_server.latest_session()
     status = live_server.status_payload(session)
     status["bonsai"] = False
+    status["model"] = MODEL_ID or ""
     request = urllib.request.Request(API_BASE.rstrip("/") + "/models", method="GET")
     try:
         with urllib.request.urlopen(request, timeout=2) as response:
+            models_data = json.loads(response.read(500_000).decode("utf-8"))
+            available = models_data.get("data", [])
             status["bonsai"] = response.status == 200
-    except (urllib.error.URLError, TimeoutError, OSError):
+            if not status["model"] and available:
+                status["model"] = str(available[0].get("id", ""))
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError, AttributeError, TypeError):
         pass
     return status
 
