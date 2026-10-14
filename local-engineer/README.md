@@ -48,6 +48,10 @@ local-engineer-qwen projects
 local-engineer-qwen inspect rmk-pg1kb "Inspect the registered project and relevant source; do not edit"
 ```
 
+With the Qwen launcher, `local-engineer-qwen status` reports the selected API
+endpoint and model instead of showing the legacy Bonsai process status. The
+default `local-engineer status` behavior remains unchanged.
+
 Ollama does not expose the llama-server `/apply-template` and `/tokenize` endpoints
 used by the Bonsai path. The Qwen launcher therefore uses a conservative byte-based
 token estimate for context budgeting. This estimate is approximate; verify the
