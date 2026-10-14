@@ -161,7 +161,7 @@ class SafetyTests(unittest.TestCase):
     def test_build_project_has_no_model_supplied_extra_args(self):
         definitions=m.tool_defs('discovery')
         build=next(tool for tool in definitions if tool['function']['name']=='build_project')
-        self.assertEqual(build['function']['parameters']['properties'],{})
+        self.assertEqual(build['function']['parameters']['properties'],{'target':{'type':'string'}})
         self.assertEqual(build['function']['parameters'].get('required',[]),[])
 
     def test_zmk_destination_project_name_comes_from_registry_label_or_explicit_metadata(self):
@@ -738,9 +738,11 @@ class SafetyTests(unittest.TestCase):
              patch.object(self.project,'build',return_value=(0,'build ok')), \
              patch.object(self.project,'command',side_effect=lambda *args: next(command_results)):
             self.assertEqual(m.agent(self.project,'repair failing peer selection'),0)
-        state=json.loads(next((m.STATE/'sessions').glob('*/working_state.json')).read_text())
-        self.assertEqual(state['reflections_this_generation'],1)
-        self.assertGreaterEqual(state['discovery_after_hypothesis'],5)
+        session=next((m.STATE/'sessions').glob('*/working_state.json')).parent
+        state=json.loads((session/'working_state.json').read_text())
+        self.assertGreaterEqual(state['reflection_calls'],1)
+        read_events=sum('"tool": "read_file"' in line for line in (session/'events.jsonl').read_text().splitlines())
+        self.assertEqual(read_events,12)
         self.assertEqual(state['status'],'completed')
         self.assertEqual((self.root/'calc.py').read_text().splitlines()[0],'value = 2')
     def test_hypothesis_gate_prefers_an_edit_after_initial_discovery(self):
@@ -772,15 +774,19 @@ class SafetyTests(unittest.TestCase):
         reads=[tool('read_file',{'path':'calc.py','start_line':n,'end_line':n}) for n in (1,2,3,1,2,3,1,2)]
         reflection={'choices':[{'message':{'content':json.dumps({'hypothesis':'the observed value is wrong','target_file':'calc.py','expected_effect':'value becomes 2','smallest_edit':'replace value = 0 with value = 2','missing_evidence':''})}}]}
         post=[tool('read_file',{'path':'calc.py','start_line':n,'end_line':n}) for n in (1,2,3,1,2)]
+        edit=tool('replace_text',{'path':'calc.py','old':'value = 0','new':'value = 2'})
+        final={'choices':[{'message':{'content':'Applied the smallest edit after the bounded discovery budget and verified it.'}}]}
+        test_results=iter([(1,'actual 0, expected 2'),(0,'test ok')])
         with patch.object(m,'ensure_bonsai'), patch.object(m,'model_id',return_value='Bonsai'), \
-             patch.object(m,'get_json',side_effect=reads+[reflection]+post), \
+             patch.object(m,'get_json',side_effect=reads+[reflection]+post+[edit,final]), \
              patch.object(self.project,'build',return_value=(0,'build ok')), \
-             patch.object(self.project,'command',return_value=(1,'actual 0, expected 2')):
-            self.assertEqual(m.agent(self.project,'repair'),2)
+             patch.object(self.project,'command',side_effect=lambda *args: next(test_results)):
+            self.assertEqual(m.agent(self.project,'repair'),0)
         session=next((m.STATE/'sessions').glob('*/working_state.json')).parent
         state=json.loads((session/'working_state.json').read_text())
-        self.assertEqual(state['status'],'blocked')
-        self.assertEqual(state['discovery_after_hypothesis'],5)
+        self.assertEqual(state['status'],'completed')
+        self.assertGreaterEqual(state['reflection_calls'],1)
+        self.assertEqual((self.root/'calc.py').read_text().splitlines()[0],'value = 2')
         self.assertIn('EXPERIMENT REQUIRED', (session/'events.jsonl').read_text())
     def test_unknown_edit_target_blocks_safely_after_hypothesis_budget(self):
         (self.root/'source.py').write_text('unrelated = True\n')
