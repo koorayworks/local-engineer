@@ -98,7 +98,8 @@ textarea{resize:vertical;min-height:85px}.row{display:flex;gap:8px;align-items:c
 <div class="row" style="margin-top:8px"><button id="send" class="primary">AIへ送信</button><button id="cancel-chat" class="hidden">相談を中断</button><span class="muted">相談のみ・編集は行いません</span></div>
 </section>
 <section class="panel" id="tab-queue"><div class="section-title">指示キュー <span class="tag">実行待ち</span></div>
-<div class="section-title" style="margin-top:4px">ローカルAIに作業計画を提案してもらう</div>
+<label for="project" class="muted">実行対象プロジェクト</label><select id="project" aria-label="実行対象プロジェクト"><option value="">プロジェクトを読み込み中…</option></select>
+<div class="section-title" style="margin-top:10px">ローカルAIに作業計画を提案してもらう</div>
 <textarea id="plan-goal" placeholder="例：RMK版PG1KBの現状を調べ、次に必要な作業を段階的に整理して"></textarea>
 <div class="row" style="margin-top:8px"><button id="propose-plan" class="primary">計画を作成</button><button id="cancel-plan" class="hidden">計画生成を中断</button><span class="muted">提案だけでは実行されません</span></div>
 <div id="plan-preview" style="margin:10px 0"></div>
@@ -124,6 +125,7 @@ async function refresh(){
  if(!connected)return;
  try{
   const s=await api('/api/status');$('session').textContent=s.session||'セッションなし';$('phase').textContent=(s.status||'不明')+' · '+(s.phase||'');$('build').textContent=s.build_status||'未記録';$('engine-name').textContent=s.model||'ローカルAI';$('bonsai').textContent=s.bonsai?'API接続OK':'API未確認';
+  const p=await api('/api/projects');const ps=$('project');const oldProject=ps.value;const names=p.projects||[];ps.replaceChildren();names.forEach(n=>{const o=document.createElement('option');o.value=n;o.textContent=n;ps.append(o)});if(names.includes(oldProject))ps.value=oldProject;if(!names.length){const o=document.createElement('option');o.value='';o.textContent='登録済みプロジェクトなし';ps.append(o)}
   const q=await api('/api/tasks');$('count').textContent=q.tasks.length+'件';renderTasks(q.tasks);
   const ev=await api('/api/events?since='+lastSeq);if(ev.events.length){lastSeq=Math.max(lastSeq,...ev.events.map(e=>e._seq||0));const box=$('events');if(lastSeq===Math.max(...ev.events.map(e=>e._seq||0))&&box.querySelector('.muted'))box.replaceChildren();for(const e of ev.events){const d=document.createElement('div');d.className='log';d.textContent=[e._seq,e.tool||e.type||'event',e.result||e.message||''].filter(Boolean).join(' · ').slice(0,1000);box.append(d)}}
  }catch(e){note('接続エラー: '+e.message)}
@@ -165,7 +167,7 @@ $('propose-plan').addEventListener('click',async()=>{
   proposedPlan=data.plan;const box=$('plan-preview');const summary=document.createElement('div');summary.className='msg ai';summary.textContent=proposedPlan.summary;box.append(summary);
   const list=document.createElement('ol');for(const step of proposedPlan.steps){const li=document.createElement('li');li.style.margin='10px 0';const title=document.createElement('strong');title.textContent=step.title+'（'+step.priority+'）';li.append(title);for(const [label,key] of [['完了条件','acceptance_criteria'],['検証方法','verification_method'],['次へ進む条件','gate']]){if(step[key]){const detail=document.createElement('div');detail.className='muted';detail.style.marginTop='4px';detail.textContent=label+'：'+step[key];li.append(detail)}}list.append(li)}box.append(list);
   const approve=document.createElement('button');approve.className='primary';approve.textContent='この計画をキューに登録';approve.addEventListener('click',async()=>{
-   approve.disabled=true;try{const saved=await api('/api/tasks/batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tasks:proposedPlan.steps})});note(saved.tasks.length+'件をキューに登録しました（未実行）');proposedPlan=null;box.replaceChildren();await refresh()}catch(e){note('登録できません: '+e.message);approve.disabled=false}
+   approve.disabled=true;try{const saved=await api('/api/tasks/batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tasks:proposedPlan.steps,project:$('project').value})});note(saved.tasks.length+'件をキューに登録しました（未実行）');proposedPlan=null;box.replaceChildren();await refresh()}catch(e){note('登録できません: '+e.message);approve.disabled=false}
   });box.append(approve);note('計画案ができました。内容を確認してから登録してください。');
  }catch(e){if(e.name==='AbortError'){note('計画生成を中断しました');$('plan-preview').replaceChildren();proposedPlan=null}else{note('計画を作成できません: '+e.message)}}finally{if(planRequest&&planRequest.requestId===requestId)planRequest=null;btn.disabled=false;btn.textContent='計画を作成';cancel.classList.add('hidden')}
 });
@@ -174,7 +176,7 @@ $('cancel-plan').addEventListener('click',async()=>{
  try{await api('/api/plan/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({request_id:current.requestId})})}catch(e){note('計画の中断要求を送信しました。'+e.message)}
  current.controller.abort();$('cancel-plan').disabled=false;
 });
-$('add-task').addEventListener('click',async()=>{const title=$('task-input').value.trim();if(!title){$('task-input').focus();return}if(!connected){note('先に接続してください');return}try{await api('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title,priority:$('priority').value})});$('task-input').value='';note('キューに保存しました（未実行）');await refresh()}catch(e){note(e.message)}});
+$('add-task').addEventListener('click',async()=>{const title=$('task-input').value.trim();if(!title){$('task-input').focus();return}if(!connected){note('先に接続してください');return}try{await api('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title,priority:$('priority').value,project:$('project').value})});$('task-input').value='';note('キューに保存しました。各タスクの「実行」で開始できます。');await refresh()}catch(e){note(e.message)}});
 document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('[data-tab]').forEach(x=>x.classList.toggle('primary',x===b));['chat','queue','activity'].forEach(t=>$('tab-'+t).classList.toggle('hidden',t!==b.dataset.tab))}));
 if(token){connected=true;refresh()}setInterval(refresh,5000);
 })();
