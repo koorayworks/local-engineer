@@ -100,11 +100,27 @@ def compact_tool_definition(tool):
 
 def measure_tokens(m,payload):
     base=m.API_BASE.rsplit('/v1',1)[0]
-    template=m.get_json(base+'/apply-template',{
-        'messages':payload['messages'],'tools':payload.get('tools',[]),
-        'chat_template_kwargs':payload.get('chat_template_kwargs',{}),
-        'add_generation_prompt':True},timeout=15)
-    return len(m.get_json(base+'/tokenize',{'content':template['prompt']},timeout=15)['tokens'])
+    try:
+        template=m.get_json(base+'/apply-template',{
+            'messages':payload['messages'],'tools':payload.get('tools',[]),
+            'chat_template_kwargs':payload.get('chat_template_kwargs',{}),
+            'add_generation_prompt':True},timeout=15)
+        return len(m.get_json(base+'/tokenize',{'content':template['prompt']},timeout=15)['tokens'])
+    except (urllib.error.HTTPError, urllib.error.URLError, socket.timeout, KeyError, TypeError, ValueError):
+        # Ollama's OpenAI-compatible API does not expose Bonsai/llama-server's
+        # /apply-template and /tokenize endpoints. Only use an estimate when a
+        # non-Bonsai model was explicitly enabled; keep the Bonsai path strict.
+        allow_other=os.environ.get('LOCAL_ENGINEER_ALLOW_NON_BONSAI','').lower() in ('1','true','yes','on')
+        if not allow_other:
+            raise
+        serialized=json.dumps({
+            'messages':payload.get('messages',[]),
+            'tools':payload.get('tools',[]),
+            'chat_template_kwargs':payload.get('chat_template_kwargs',{})
+        },ensure_ascii=False,separators=(',',':'))
+        # Conservative byte-based estimate: prefer underfilling the context to
+        # overflowing it when the backend has no tokenizer endpoint.
+        return max(1,(len(serialized.encode('utf-8'))+1)//2)
 
 
 def request_completion(m,payload):
@@ -454,7 +470,8 @@ def _run_agent(m,project,task,resume=None):
     facts=preflight(project)
     m.ensure_bonsai()
     model=m.model_id()
-    if 'bonsai' not in model.lower(): raise RuntimeError('Bonsai model required; got '+model)
+    if 'bonsai' not in model.lower() and os.environ.get('LOCAL_ENGINEER_ALLOW_NON_BONSAI','').lower() not in ('1','true','yes','on'):
+        raise RuntimeError('Bonsai model required unless LOCAL_ENGINEER_ALLOW_NON_BONSAI=1; got '+model)
     run_id=dt.datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex[:6]
     directory=m.STATE/'sessions'/run_id
     project.backup_root=m.STATE/'backups'/project.name/run_id
