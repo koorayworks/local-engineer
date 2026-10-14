@@ -34,6 +34,27 @@ class ControlCenterQueueTests(unittest.TestCase):
         self.assertEqual(cc.load_tasks(), [])
         self.assertFalse(cc.delete_task(task["id"]))
 
+    def test_registered_project_is_saved_and_unregistered_project_rejected(self):
+        with patch.object(cc, "project_names", return_value=["grin_rc"]):
+            task = cc.add_task("inspect WS2812", "normal", "grin_rc")
+            self.assertEqual(task["project"], "grin_rc")
+            with self.assertRaisesRegex(ValueError, "not registered"):
+                cc.add_task("inspect unknown project", "normal", "not-registered")
+
+    def test_start_task_marks_selected_project_running_without_inline_execution(self):
+        with patch.object(cc, "project_names", return_value=["demo"]):
+            task = cc.add_task("inspect only", "normal", "demo")
+            with patch.object(cc.threading, "Thread") as thread_factory:
+                try:
+                    started = cc.start_task(task["id"])
+                    self.assertEqual(started["status"], "running")
+                    self.assertEqual(started["project"], "demo")
+                    thread_factory.assert_called_once()
+                    thread_factory.return_value.start.assert_called_once()
+                finally:
+                    with cc.RUN_LOCK:
+                        cc.ACTIVE_RUNS.pop(task["id"], None)
+
     def test_invalid_task_is_rejected(self):
         for title, priority in (("", "normal"), ("x", "urgent"), ("x" * 1001, "normal")):
             with self.subTest(title_length=len(title), priority=priority):
@@ -73,6 +94,13 @@ class ControlCenterQueueTests(unittest.TestCase):
         self.assertEqual(payload["model"], "local-bonsai-27b")
         self.assertIn("cannot inspect or edit files", payload["messages"][0]["content"])
         self.assertEqual(payload["messages"][1]["content"], "WS2812の設計で確認することは？")
+
+    def test_local_engineer_model_override_takes_precedence_over_bonsai(self):
+        with patch.dict("os.environ", {
+            "LOCAL_ENGINEER_MODEL": "qwen2.5-coder:3b",
+            "BONSAI_MODEL": "legacy-bonsai-model",
+        }):
+            self.assertEqual(cc._chat_model(), "qwen2.5-coder:3b")
 
     def test_chat_stream_emits_content_deltas_and_uses_streaming_api(self):
         class FakeResponse:

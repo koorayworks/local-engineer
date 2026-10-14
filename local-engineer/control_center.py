@@ -14,6 +14,8 @@ import json
 import os
 import pathlib
 import secrets
+import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -30,7 +32,8 @@ STATE = pathlib.Path(os.environ.get(
 CONTROL_DIR = STATE / "control-center"
 TASKS_PATH = CONTROL_DIR / "tasks.json"
 TOKEN_PATH = CONTROL_DIR / "auth.token"
-API_BASE = os.environ.get("BONSAI_API_BASE", "http://127.0.0.1:8080/v1")
+API_BASE = os.environ.get("LOCAL_ENGINEER_API_BASE", os.environ.get("BONSAI_API_BASE", "http://127.0.0.1:8080/v1"))
+MODEL_ID = os.environ.get("LOCAL_ENGINEER_MODEL", os.environ.get("BONSAI_MODEL", "")).strip()
 MAX_BODY = 16_000
 MAX_TASKS = 1000
 TASK_LOCK = threading.Lock()
@@ -39,6 +42,8 @@ STREAM_LOCK = threading.Lock()
 ACTIVE_STREAMS: dict[str, dict] = {}
 PLAN_LOCK = threading.Lock()
 ACTIVE_PLANS: dict[str, dict] = {}
+RUN_LOCK = threading.Lock()
+ACTIVE_RUNS: dict[str, subprocess.Popen] = {}
 
 
 HTML = r"""<!doctype html>
@@ -77,30 +82,31 @@ textarea{resize:vertical;min-height:85px}.row{display:flex;gap:8px;align-items:c
 </style>
 </head>
 <body><main>
-<header class="head"><div class="logo">LE</div><div><h1>Local Engineer Control Center</h1><div class="sub">ローカル優先 · Bonsai · タスクキュー</div></div><span class="badge">プロトタイプ</span></header>
+<header class="head"><div class="logo">LE</div><div><h1>Local Engineer Control Center</h1><div class="sub">ローカル優先 · ローカルAI · タスクキュー</div></div><span class="badge">プロトタイプ</span></header>
 <section class="panel" id="authbox"><div class="section-title">ローカル接続トークン</div><div class="row"><input id="token" type="password" autocomplete="current-password" placeholder="ターミナルに表示されたトークン"><button id="connect" class="primary">接続</button></div><div class="foot">このトークンはAPI操作の認証に使います。共有端末では保存しないでください。</div><div id="notice"></div></section>
 <section class="grid">
-<div class="stat"><label>AIエンジン</label><strong>Bonsai 27B</strong><div class="sub" id="bonsai">接続確認前</div></div>
+<div class="stat"><label>AIエンジン</label><strong id="engine-name">ローカルAI</strong><div class="sub" id="bonsai">接続確認前</div></div>
 <div class="stat"><label>Local Engineer</label><strong id="session">未取得</strong><div class="sub" id="phase">状態未取得</div></div>
 <div class="stat"><label>ビルド</label><strong id="build">未確認</strong><div class="sub">実際の記録値</div></div>
 <div class="stat"><label>指示キュー</label><strong id="count">未取得</strong><div class="sub">永続保存</div></div>
 </section>
 <nav class="tabs"><button class="primary" data-tab="chat">AIチャット</button><button data-tab="queue">指示キュー</button><button data-tab="activity">イベント</button></nav>
 <div class="two">
-<section class="panel" id="tab-chat"><div class="section-title">Bonsaiに相談 <span class="tag">ローカルAPI</span></div>
-<div class="feed" id="feed"><div class="msg ai"><div class="who">Local Engineer</div>接続後、Bonsaiに技術相談できます。このチャットは相談用で、コード編集やビルドを直接実行しません。</div></div>
+<section class="panel" id="tab-chat"><div class="section-title">ローカルAIに相談 <span class="tag">ローカルAPI</span></div>
+<div class="feed" id="feed"><div class="msg ai"><div class="who">Local Engineer</div>接続後、設定したローカルAIに技術相談できます。このチャットは相談用で、コード編集やビルドを直接実行しません。</div></div>
 <textarea id="chat-input" placeholder="例：STM32F411でWS2812をPWM＋DMA駆動する際の確認事項を整理して"></textarea>
-<div class="row" style="margin-top:8px"><button id="send" class="primary">Bonsaiへ送信</button><button id="cancel-chat" class="hidden">相談を中断</button><span class="muted">相談のみ・編集は行いません</span></div>
+<div class="row" style="margin-top:8px"><button id="send" class="primary">AIへ送信</button><button id="cancel-chat" class="hidden">相談を中断</button><span class="muted">相談のみ・編集は行いません</span></div>
 </section>
 <section class="panel" id="tab-queue"><div class="section-title">指示キュー <span class="tag">実行待ち</span></div>
-<div class="section-title" style="margin-top:4px">Bonsaiに作業計画を提案してもらう</div>
+<label for="project" class="muted">実行対象プロジェクト</label><select id="project" aria-label="実行対象プロジェクト"><option value="">プロジェクトを読み込み中…</option></select>
+<div class="section-title" style="margin-top:10px">ローカルAIに作業計画を提案してもらう</div>
 <textarea id="plan-goal" placeholder="例：RMK版PG1KBの現状を調べ、次に必要な作業を段階的に整理して"></textarea>
 <div class="row" style="margin-top:8px"><button id="propose-plan" class="primary">計画を作成</button><button id="cancel-plan" class="hidden">計画生成を中断</button><span class="muted">提案だけでは実行されません</span></div>
 <div id="plan-preview" style="margin:10px 0"></div>
 <div class="section-title" style="margin-top:18px">手動でタスクを追加</div>
 <textarea id="task-input" placeholder="キューに登録する作業を具体的に記入"></textarea>
 <div class="row" style="margin-top:8px"><select id="priority" aria-label="優先度"><option value="normal">通常</option><option value="high">高</option><option value="low">低</option></select><button id="add-task" class="primary">キューに追加</button></div>
-<div class="foot">Bonsaiの計画を確認してからキューに登録できます。キューは保存のみで、実行ランナーはまだ接続されていません。</div>
+<div class="foot">計画案は確認してから登録します。実行対象を選び、各タスクの「実行」を押したときだけLocal Engineerを起動します。実行ログで結果を確認してください。</div>
 <div id="tasks" style="margin-top:12px"></div>
 </section>
 </div>
@@ -113,18 +119,19 @@ const $=id=>document.getElementById(id);let token=sessionStorage.getItem('le-tok
 $('token').value=token;
 function api(path,opts={}){opts.headers=Object.assign({'Authorization':'Bearer '+token},opts.headers||{});return fetch(path,opts).then(async r=>{const d=await r.json().catch(()=>({error:'invalid response'}));if(!r.ok)throw new Error(d.error||('HTTP '+r.status));return d})}
 function note(s){$('notice').textContent=s}
-function addMsg(role,text){const el=document.createElement('div');el.className='msg '+role;const who=document.createElement('div');who.className='who';who.textContent=role==='user'?'あなた':'Bonsai 27B';const body=document.createElement('div');body.textContent=text;el.append(who,body);$('feed').append(el);$('feed').scrollTop=$('feed').scrollHeight;return body}
+function addMsg(role,text){const el=document.createElement('div');el.className='msg '+role;const who=document.createElement('div');who.className='who';who.textContent=role==='user'?'あなた':'ローカルAI';const body=document.createElement('div');body.textContent=text;el.append(who,body);$('feed').append(el);$('feed').scrollTop=$('feed').scrollHeight;return body}
 function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 async function refresh(){
  if(!connected)return;
  try{
-  const s=await api('/api/status');$('session').textContent=s.session||'セッションなし';$('phase').textContent=(s.status||'不明')+' · '+(s.phase||'');$('build').textContent=s.build_status||'未記録';$('bonsai').textContent=s.bonsai?'API接続OK':'API未確認';
+  const s=await api('/api/status');$('session').textContent=s.session||'セッションなし';$('phase').textContent=(s.status||'不明')+' · '+(s.phase||'');$('build').textContent=s.build_status||'未記録';$('engine-name').textContent=s.model||'ローカルAI';$('bonsai').textContent=s.bonsai?'API接続OK':'API未確認';
+  const p=await api('/api/projects');const ps=$('project');const oldProject=ps.value;const names=p.projects||[];ps.replaceChildren();names.forEach(n=>{const o=document.createElement('option');o.value=n;o.textContent=n;ps.append(o)});if(names.includes(oldProject))ps.value=oldProject;if(!names.length){const o=document.createElement('option');o.value='';o.textContent='登録済みプロジェクトなし';ps.append(o)}
   const q=await api('/api/tasks');$('count').textContent=q.tasks.length+'件';renderTasks(q.tasks);
   const ev=await api('/api/events?since='+lastSeq);if(ev.events.length){lastSeq=Math.max(lastSeq,...ev.events.map(e=>e._seq||0));const box=$('events');if(lastSeq===Math.max(...ev.events.map(e=>e._seq||0))&&box.querySelector('.muted'))box.replaceChildren();for(const e of ev.events){const d=document.createElement('div');d.className='log';d.textContent=[e._seq,e.tool||e.type||'event',e.result||e.message||''].filter(Boolean).join(' · ').slice(0,1000);box.append(d)}}
  }catch(e){note('接続エラー: '+e.message)}
 }
 function renderTasks(tasks){const box=$('tasks');box.replaceChildren();if(!tasks.length){const p=document.createElement('div');p.className='muted';p.textContent='キューは空です。';box.append(p);return}
- tasks.slice().reverse().forEach(t=>{const el=document.createElement('div');el.className='task';const row=document.createElement('div');row.className='row';const name=document.createElement('div');name.className='task-name';name.style.flex='1';name.textContent=t.title;const tag=document.createElement('span');tag.className='tag';tag.textContent=t.status;row.append(name,tag);const meta=document.createElement('div');meta.className='task-meta';meta.textContent='優先度: '+t.priority+' · '+t.created_at+' · '+t.id.slice(0,8);if(t.acceptance_criteria||t.verification_method||t.gate){const details=document.createElement('div');details.className='muted';details.style.marginTop='6px';details.style.whiteSpace='pre-wrap';details.textContent=[t.acceptance_criteria?'完了条件：'+t.acceptance_criteria:'',t.verification_method?'検証方法：'+t.verification_method:'',t.gate?'次へ進む条件：'+t.gate:''].filter(Boolean).join('\n');meta.append(document.createElement('br'),details)}const del=document.createElement('button');del.textContent='削除';del.style.marginTop='8px';del.addEventListener('click',async()=>{try{await api('/api/tasks/'+encodeURIComponent(t.id),{method:'DELETE'});note('タスクを削除しました');refresh()}catch(e){note(e.message)}});el.append(row,meta,del);box.append(el)})
+ tasks.slice().reverse().forEach(t=>{const el=document.createElement('div');el.className='task';const row=document.createElement('div');row.className='row';const name=document.createElement('div');name.className='task-name';name.style.flex='1';name.textContent=t.title;const tag=document.createElement('span');tag.className='tag';tag.textContent=t.status;row.append(name,tag);const meta=document.createElement('div');meta.className='task-meta';meta.textContent=(t.project||'プロジェクト未指定')+' · 優先度: '+t.priority+' · '+t.created_at+' · '+t.id.slice(0,8);if(t.acceptance_criteria||t.verification_method||t.gate){const details=document.createElement('div');details.className='muted';details.style.marginTop='6px';details.style.whiteSpace='pre-wrap';details.textContent=[t.acceptance_criteria?'完了条件：'+t.acceptance_criteria:'',t.verification_method?'検証方法：'+t.verification_method:'',t.gate?'次へ進む条件：'+t.gate:''].filter(Boolean).join('\n');meta.append(document.createElement('br'),details)}const run=document.createElement('button');run.textContent='実行';run.style.marginTop='8px';run.disabled=t.status!=='queued';run.addEventListener('click',async()=>{if(!confirm('このタスクをLocal Engineerで実行しますか？\\n'+(t.project||'プロジェクト未指定')+': '+t.title))return;run.disabled=true;try{await api('/api/tasks/'+encodeURIComponent(t.id)+'/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});note('実行を開始しました。ログを確認してください。');refresh()}catch(e){note(e.message);run.disabled=false}});const log=document.createElement('button');log.textContent='ログ';log.style.marginTop='8px';log.addEventListener('click',async()=>{try{const d=await api('/api/tasks/'+encodeURIComponent(t.id)+'/log');let view=el.querySelector('.task-log');if(!view){view=document.createElement('pre');view.className='task-log';view.style.whiteSpace='pre-wrap';view.style.overflowWrap='anywhere';view.style.fontSize='11px';el.append(view)}view.textContent=d.log||'ログはまだありません。'}catch(e){note(e.message)}});const del=document.createElement('button');del.textContent='削除';del.style.marginTop='8px';del.addEventListener('click',async()=>{try{await api('/api/tasks/'+encodeURIComponent(t.id),{method:'DELETE'});note('タスクを削除しました');refresh()}catch(e){note(e.message)}});el.append(row,meta,run,log,del);box.append(el)})
 }
 $('connect').addEventListener('click',async()=>{token=$('token').value.trim();if(!token){note('トークンを入力してください');return}sessionStorage.setItem('le-token',token);connected=true;try{const s=await api('/api/status');note('接続しました');$('bonsai').textContent=s.bonsai?'API接続OK':'API未確認';await refresh()}catch(e){connected=false;note('接続できません: '+e.message)}});
 let activeChat=null;
@@ -160,7 +167,7 @@ $('propose-plan').addEventListener('click',async()=>{
   proposedPlan=data.plan;const box=$('plan-preview');const summary=document.createElement('div');summary.className='msg ai';summary.textContent=proposedPlan.summary;box.append(summary);
   const list=document.createElement('ol');for(const step of proposedPlan.steps){const li=document.createElement('li');li.style.margin='10px 0';const title=document.createElement('strong');title.textContent=step.title+'（'+step.priority+'）';li.append(title);for(const [label,key] of [['完了条件','acceptance_criteria'],['検証方法','verification_method'],['次へ進む条件','gate']]){if(step[key]){const detail=document.createElement('div');detail.className='muted';detail.style.marginTop='4px';detail.textContent=label+'：'+step[key];li.append(detail)}}list.append(li)}box.append(list);
   const approve=document.createElement('button');approve.className='primary';approve.textContent='この計画をキューに登録';approve.addEventListener('click',async()=>{
-   approve.disabled=true;try{const saved=await api('/api/tasks/batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tasks:proposedPlan.steps})});note(saved.tasks.length+'件をキューに登録しました（未実行）');proposedPlan=null;box.replaceChildren();await refresh()}catch(e){note('登録できません: '+e.message);approve.disabled=false}
+   approve.disabled=true;try{const saved=await api('/api/tasks/batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tasks:proposedPlan.steps,project:$('project').value})});note(saved.tasks.length+'件をキューに登録しました（未実行）');proposedPlan=null;box.replaceChildren();await refresh()}catch(e){note('登録できません: '+e.message);approve.disabled=false}
   });box.append(approve);note('計画案ができました。内容を確認してから登録してください。');
  }catch(e){if(e.name==='AbortError'){note('計画生成を中断しました');$('plan-preview').replaceChildren();proposedPlan=null}else{note('計画を作成できません: '+e.message)}}finally{if(planRequest&&planRequest.requestId===requestId)planRequest=null;btn.disabled=false;btn.textContent='計画を作成';cancel.classList.add('hidden')}
 });
@@ -169,7 +176,7 @@ $('cancel-plan').addEventListener('click',async()=>{
  try{await api('/api/plan/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({request_id:current.requestId})})}catch(e){note('計画の中断要求を送信しました。'+e.message)}
  current.controller.abort();$('cancel-plan').disabled=false;
 });
-$('add-task').addEventListener('click',async()=>{const title=$('task-input').value.trim();if(!title){$('task-input').focus();return}if(!connected){note('先に接続してください');return}try{await api('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title,priority:$('priority').value})});$('task-input').value='';note('キューに保存しました（未実行）');await refresh()}catch(e){note(e.message)}});
+$('add-task').addEventListener('click',async()=>{const title=$('task-input').value.trim();if(!title){$('task-input').focus();return}if(!connected){note('先に接続してください');return}try{await api('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title,priority:$('priority').value,project:$('project').value})});$('task-input').value='';note('キューに保存しました。各タスクの「実行」で開始できます。');await refresh()}catch(e){note(e.message)}});
 document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('[data-tab]').forEach(x=>x.classList.toggle('primary',x===b));['chat','queue','activity'].forEach(t=>$('tab-'+t).classList.toggle('hidden',t!==b.dataset.tab))}));
 if(token){connected=true;refresh()}setInterval(refresh,5000);
 })();
@@ -182,6 +189,18 @@ def _ensure_control_dir() -> None:
         os.chmod(CONTROL_DIR, 0o700)
     except OSError:
         pass
+
+
+def project_names() -> list[str]:
+    config_path = pathlib.Path(os.environ.get(
+        "LOCAL_ENGINEER_CONFIG", str(HOME / ".config" / "local-engineer" / "projects.json")
+    ))
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        projects = config.get("projects", {})
+        return sorted(name for name in projects if isinstance(name, str)) if isinstance(projects, dict) else []
+    except (FileNotFoundError, OSError, json.JSONDecodeError, AttributeError):
+        return []
 
 
 def load_tasks() -> list[dict]:
@@ -203,12 +222,15 @@ def save_tasks(tasks: list[dict]) -> None:
     os.replace(temp, TASKS_PATH)
 
 
-def add_task(title: str, priority: str = "normal") -> dict:
+def add_task(title: str, priority: str = "normal", project: str = "") -> dict:
     title = " ".join(str(title).split())
     if not title or len(title) > 1000:
         raise ValueError("title must contain 1-1000 characters")
     if priority not in ("low", "normal", "high"):
         raise ValueError("priority must be low, normal, or high")
+    project = str(project).strip()
+    if project and project not in project_names():
+        raise ValueError("project is not registered in Local Engineer")
     with TASK_LOCK:
         tasks = load_tasks()
         if len(tasks) >= MAX_TASKS:
@@ -217,6 +239,7 @@ def add_task(title: str, priority: str = "normal") -> dict:
             "id": uuid.uuid4().hex,
             "title": title,
             "priority": priority,
+            "project": project,
             "status": "queued",
             "created_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
         }
@@ -225,10 +248,13 @@ def add_task(title: str, priority: str = "normal") -> dict:
         return task
 
 
-def add_tasks(items: list[dict]) -> list[dict]:
+def add_tasks(items: list[dict], project: str = "") -> list[dict]:
     """Validate and persist a user-approved plan as queued tasks, atomically."""
     if not isinstance(items, list) or not 1 <= len(items) <= 8:
         raise ValueError("tasks must contain 1-8 items")
+    project = str(project).strip()
+    if project and project not in project_names():
+        raise ValueError("project is not registered in Local Engineer")
     prepared = []
     for item in items:
         if not isinstance(item, dict):
@@ -250,6 +276,7 @@ def add_tasks(items: list[dict]) -> list[dict]:
                 "id": uuid.uuid4().hex,
                 "title": title,
                 "priority": priority,
+                "project": project,
                 "status": "queued",
                 "created_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
             }
@@ -266,11 +293,112 @@ def add_tasks(items: list[dict]) -> list[dict]:
 def delete_task(task_id: str) -> bool:
     with TASK_LOCK:
         tasks = load_tasks()
+        if any(task.get("id") == task_id and task.get("status") == "running" for task in tasks):
+            return False
         remaining = [task for task in tasks if task.get("id") != task_id]
         if len(remaining) == len(tasks):
             return False
         save_tasks(remaining)
         return True
+
+
+def _set_task_fields(task_id: str, **fields) -> bool:
+    with TASK_LOCK:
+        tasks = load_tasks()
+        for task in tasks:
+            if task.get("id") == task_id:
+                task.update(fields)
+                save_tasks(tasks)
+                return True
+    return False
+
+
+def _execute_task(task_id: str, project: str, title: str) -> None:
+    log_dir = CONTROL_DIR / "runs"
+    log_path = log_dir / (task_id + ".log")
+    runtime = pathlib.Path(__file__).resolve().with_name("local_engineer.py")
+    command = [sys.executable, str(runtime), "fix", project, title]
+    return_code = 1
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        # Never launch the CLI unless the selected Control Center model endpoint responds.
+        with urllib.request.urlopen(API_BASE.rstrip("/") + "/models", timeout=3):
+            pass
+        child_env = os.environ.copy()
+        child_env["BONSAI_API_BASE"] = API_BASE
+        with log_path.open("w", encoding="utf-8") as stream:
+            stream.write("$ " + " ".join(command) + "\n\n")
+            stream.flush()
+            process = subprocess.Popen(
+                command, cwd=str(runtime.parent), stdout=stream,
+                stderr=subprocess.STDOUT, text=True, env=child_env,
+                start_new_session=(os.name == "posix"),
+            )
+            with RUN_LOCK:
+                ACTIVE_RUNS[task_id] = process
+            return_code = process.wait()
+    except Exception as exc:
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8") as stream:
+                stream.write("\nControl Center runner error: " + repr(exc) + "\n")
+        except OSError:
+            pass
+    finally:
+        _set_task_fields(
+            task_id,
+            status="completed" if return_code == 0 else "failed",
+            finished_at=dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+            exit_code=return_code,
+            log_file=str(log_path),
+        )
+        with RUN_LOCK:
+            ACTIVE_RUNS.pop(task_id, None)
+
+
+def start_task(task_id: str) -> dict:
+    with RUN_LOCK:
+        if ACTIVE_RUNS:
+            raise ValueError("別のタスクが実行中です。完了後に開始してください")
+        ACTIVE_RUNS[task_id] = None
+    try:
+        with TASK_LOCK:
+            tasks = load_tasks()
+            task = next((item for item in tasks if item.get("id") == task_id), None)
+            if task is None:
+                raise ValueError("task not found")
+            if task.get("status") != "queued":
+                raise ValueError("queued状態のタスクだけ実行できます")
+            project = str(task.get("project", "")).strip()
+            if not project or project not in project_names():
+                raise ValueError("実行対象プロジェクトが未指定か、登録されていません")
+            task["status"] = "running"
+            task["started_at"] = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+            save_tasks(tasks)
+            snapshot = dict(task)
+        worker = threading.Thread(
+            target=_execute_task,
+            args=(task_id, project, snapshot["title"]),
+            name="control-center-task-" + task_id[:8],
+            daemon=True,
+        )
+        worker.start()
+        return snapshot
+    except Exception:
+        with RUN_LOCK:
+            ACTIVE_RUNS.pop(task_id, None)
+        raise
+
+
+def task_log(task_id: str) -> str:
+    if not any(task.get("id") == task_id for task in load_tasks()):
+        raise ValueError("task not found")
+    path = CONTROL_DIR / "runs" / (task_id + ".log")
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace")
+        return content[-20000:]
+    except (FileNotFoundError, OSError):
+        return ""
 
 
 def ensure_token() -> str:
@@ -421,7 +549,7 @@ def bonsai_plan(goal: str, request_id: str | None = None) -> dict:
 
 
 def _chat_model() -> str:
-    model = os.environ.get("BONSAI_MODEL", "").strip()
+    model = os.environ.get("LOCAL_ENGINEER_MODEL", os.environ.get("BONSAI_MODEL", MODEL_ID)).strip()
     if model:
         return model
     models_request = urllib.request.Request(API_BASE.rstrip("/") + "/models", method="GET")
@@ -545,11 +673,16 @@ def current_status() -> dict:
     session = live_server.latest_session()
     status = live_server.status_payload(session)
     status["bonsai"] = False
+    status["model"] = MODEL_ID or ""
     request = urllib.request.Request(API_BASE.rstrip("/") + "/models", method="GET")
     try:
         with urllib.request.urlopen(request, timeout=2) as response:
+            models_data = json.loads(response.read(500_000).decode("utf-8"))
+            available = models_data.get("data", [])
             status["bonsai"] = response.status == 200
-    except (urllib.error.URLError, TimeoutError, OSError):
+            if not status["model"] and available:
+                status["model"] = str(available[0].get("id", ""))
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError, AttributeError, TypeError):
         pass
     return status
 
@@ -600,9 +733,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/status":
             self._send_json(current_status())
+        elif path == "/api/projects":
+            self._send_json({"projects": project_names()})
         elif path == "/api/tasks":
             with TASK_LOCK:
                 self._send_json({"tasks": load_tasks()})
+        elif path.startswith("/api/tasks/") and path.endswith("/log"):
+            task_id = path[len("/api/tasks/"):-len("/log")].strip("/")
+            try:
+                self._send_json({"log": task_log(task_id)})
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, 404)
         elif path == "/api/events":
             from urllib.parse import parse_qs
             query = parse_qs(urlparse(self.path).query)
@@ -622,8 +763,14 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         try:
             body = self._body()
-            if path == "/api/tasks":
-                task = add_task(body.get("title", ""), body.get("priority", "normal"))
+            if path.startswith("/api/tasks/") and path.endswith("/run"):
+                task_id = path[len("/api/tasks/"):-len("/run")].strip("/")
+                if not task_id or "/" in task_id:
+                    raise ValueError("invalid task id")
+                task = start_task(task_id)
+                self._send_json({"task": task}, 202)
+            elif path == "/api/tasks":
+                task = add_task(body.get("title", ""), body.get("priority", "normal"), body.get("project", ""))
                 self._send_json({"task": task}, 201)
             elif path == "/api/plan":
                 request_id = str(body.get("request_id", ""))
@@ -640,7 +787,7 @@ class Handler(BaseHTTPRequestHandler):
                     with PLAN_LOCK:
                         ACTIVE_PLANS.pop(request_id, None)
             elif path == "/api/tasks/batch":
-                created = add_tasks(body.get("tasks", []))
+                created = add_tasks(body.get("tasks", []), body.get("project", ""))
                 self._send_json({"tasks": created}, 201)
             elif path == "/api/chat":
                 reply = bonsai_chat(body.get("message", ""))
