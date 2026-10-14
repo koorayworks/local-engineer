@@ -11,10 +11,42 @@ import tempfile
 import unittest
 import urllib.error
 from unittest.mock import patch
+from types import SimpleNamespace
 
 import local_engineer as m
 import engineer_runtime as er
 from engineer_runtime import bounded_process, preflight, atomic_json, request_completion
+
+
+class OllamaTokenBudgetTests(unittest.TestCase):
+    def test_non_bonsai_opt_in_uses_conservative_token_estimate(self):
+        api_error = urllib.error.HTTPError(
+            "http://127.0.0.1:11434/apply-template", 404, "Not Found", None, None
+        )
+        model = SimpleNamespace(
+            API_BASE="http://127.0.0.1:11434/v1",
+            get_json=lambda *args, **kwargs: (_ for _ in ()).throw(api_error),
+        )
+        payload = {
+            "messages": [{"role": "user", "content": "Inspect this Rust source."}],
+            "tools": [],
+        }
+        with patch.dict(os.environ, {"LOCAL_ENGINEER_ALLOW_NON_BONSAI": "1"}):
+            estimate = er.measure_tokens(model, payload)
+        self.assertGreater(estimate, 0)
+        self.assertGreaterEqual(estimate, len("Inspect this Rust source.") // 2)
+
+    def test_bonsai_path_does_not_silently_fallback_without_opt_in(self):
+        api_error = urllib.error.HTTPError(
+            "http://127.0.0.1:8080/apply-template", 404, "Not Found", None, None
+        )
+        model = SimpleNamespace(
+            API_BASE="http://127.0.0.1:8080/v1",
+            get_json=lambda *args, **kwargs: (_ for _ in ()).throw(api_error),
+        )
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(urllib.error.HTTPError):
+                er.measure_tokens(model, {"messages": [], "tools": []})
 
 
 class SafetyTests(unittest.TestCase):
