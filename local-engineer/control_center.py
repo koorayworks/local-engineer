@@ -293,6 +293,8 @@ def add_tasks(items: list[dict], project: str = "") -> list[dict]:
 def delete_task(task_id: str) -> bool:
     with TASK_LOCK:
         tasks = load_tasks()
+        if any(task.get("id") == task_id and task.get("status") == "running" for task in tasks):
+            return False
         remaining = [task for task in tasks if task.get("id") != task_id]
         if len(remaining) == len(tasks):
             return False
