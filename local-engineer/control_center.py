@@ -14,6 +14,8 @@ import json
 import os
 import pathlib
 import secrets
+import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -40,6 +42,8 @@ STREAM_LOCK = threading.Lock()
 ACTIVE_STREAMS: dict[str, dict] = {}
 PLAN_LOCK = threading.Lock()
 ACTIVE_PLANS: dict[str, dict] = {}
+RUN_LOCK = threading.Lock()
+ACTIVE_RUNS: dict[str, subprocess.Popen] = {}
 
 
 HTML = r"""<!doctype html>
@@ -183,6 +187,18 @@ def _ensure_control_dir() -> None:
         os.chmod(CONTROL_DIR, 0o700)
     except OSError:
         pass
+
+
+def project_names() -> list[str]:
+    config_path = pathlib.Path(os.environ.get(
+        "LOCAL_ENGINEER_CONFIG", str(HOME / ".config" / "local-engineer" / "projects.json")
+    ))
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        projects = config.get("projects", {})
+        return sorted(name for name in projects if isinstance(name, str)) if isinstance(projects, dict) else []
+    except (FileNotFoundError, OSError, json.JSONDecodeError, AttributeError):
+        return []
 
 
 def load_tasks() -> list[dict]:
