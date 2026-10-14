@@ -220,12 +220,15 @@ def save_tasks(tasks: list[dict]) -> None:
     os.replace(temp, TASKS_PATH)
 
 
-def add_task(title: str, priority: str = "normal") -> dict:
+def add_task(title: str, priority: str = "normal", project: str = "") -> dict:
     title = " ".join(str(title).split())
     if not title or len(title) > 1000:
         raise ValueError("title must contain 1-1000 characters")
     if priority not in ("low", "normal", "high"):
         raise ValueError("priority must be low, normal, or high")
+    project = str(project).strip()
+    if project and project not in project_names():
+        raise ValueError("project is not registered in Local Engineer")
     with TASK_LOCK:
         tasks = load_tasks()
         if len(tasks) >= MAX_TASKS:
@@ -234,6 +237,7 @@ def add_task(title: str, priority: str = "normal") -> dict:
             "id": uuid.uuid4().hex,
             "title": title,
             "priority": priority,
+            "project": project,
             "status": "queued",
             "created_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
         }
@@ -242,10 +246,13 @@ def add_task(title: str, priority: str = "normal") -> dict:
         return task
 
 
-def add_tasks(items: list[dict]) -> list[dict]:
+def add_tasks(items: list[dict], project: str = "") -> list[dict]:
     """Validate and persist a user-approved plan as queued tasks, atomically."""
     if not isinstance(items, list) or not 1 <= len(items) <= 8:
         raise ValueError("tasks must contain 1-8 items")
+    project = str(project).strip()
+    if project and project not in project_names():
+        raise ValueError("project is not registered in Local Engineer")
     prepared = []
     for item in items:
         if not isinstance(item, dict):
@@ -267,6 +274,7 @@ def add_tasks(items: list[dict]) -> list[dict]:
                 "id": uuid.uuid4().hex,
                 "title": title,
                 "priority": priority,
+                "project": project,
                 "status": "queued",
                 "created_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
             }
