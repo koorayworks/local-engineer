@@ -127,6 +127,17 @@ Open `http://127.0.0.1:8766/` and enter the bearer token printed at startup. The
 
 For phone access on a trusted LAN, bind explicitly to the Mac's reachable interface or `0.0.0.0` and use the token. Do not expose this server through an unauthenticated public endpoint or Funnel. Prefer access through a trusted private network such as Tailscale and keep the token private.
 
+The Control Center can target any local OpenAI-compatible API without changing the existing Bonsai setup. `LOCAL_ENGINEER_API_BASE` overrides `BONSAI_API_BASE`, and `LOCAL_ENGINEER_MODEL` overrides `BONSAI_MODEL`. For the separately running Ollama Qwen endpoint, start it with:
+
+```bash
+cd ~/local-engineer-src/local-engineer
+LOCAL_ENGINEER_API_BASE=http://127.0.0.1:11434/v1 \\
+LOCAL_ENGINEER_MODEL=qwen2.5-coder:3b \\
+python3 control_center.py --host 127.0.0.1 --port 8766
+```
+
+The AI engine card displays the selected model ID from the configured API. Omitting the new variables preserves the existing Bonsai defaults. This changes only the Control Center process; it does not start, stop, or reconfigure either model server.
+
 The queue panel can ask Bonsai to propose a bounded JSON plan (up to eight steps). Each step includes an actionable title, priority, observable acceptance criteria, a concrete verification method, and an optional gate/prerequisite for proceeding. The UI shows these details for review, and batch registration preserves them in the queued task records. Older plan responses that omit the optional metadata remain accepted. The user reviews the summary and steps and explicitly approves adding them to the persistent queue. Batch registration validates the steps and saves them together. This is **planning and queue registration only**: queued items are still not executed by Local Engineer. Status and event data are read from the existing session files. No task is marked complete based on chat output. Automatic queue dispatch, stop/resume/cancel integration, external AI adapters, and full end-to-end verification remain future steps.
 
 Run the new unit tests alongside the existing runtime tests:
