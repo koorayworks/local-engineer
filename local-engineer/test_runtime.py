@@ -18,6 +18,25 @@ import engineer_runtime as er
 from engineer_runtime import bounded_process, preflight, atomic_json, request_completion
 
 
+class ModelApiStatusTests(unittest.TestCase):
+    def test_ollama_endpoint_reports_selected_model_without_calling_it_bonsai(self):
+        with patch.object(m, 'API_BASE', 'http://127.0.0.1:11434/v1'), \\
+             patch.object(m, 'get_json', return_value={'data': [{'id': 'qwen2.5-coder:3b'}]}), \\
+             patch.dict(os.environ, {'BONSAI_API_BASE': 'http://127.0.0.1:8080/v1'}):
+            label, detail = m.model_api_status()
+        self.assertEqual(label, 'Active model API')
+        self.assertIn('127.0.0.1:11434/v1', detail)
+        self.assertIn('qwen2.5-coder:3b', detail)
+
+    def test_bonsai_endpoint_keeps_legacy_label(self):
+        with patch.object(m, 'API_BASE', 'http://127.0.0.1:8080/v1'), \\
+             patch.object(m, 'get_json', return_value={'data': [{'id': 'bonsai-test'}]}), \\
+             patch.dict(os.environ, {'BONSAI_API_BASE': 'http://127.0.0.1:8080/v1'}):
+            label, detail = m.model_api_status()
+        self.assertEqual(label, 'Bonsai API')
+        self.assertIn('bonsai-test', detail)
+
+
 class OllamaTokenBudgetTests(unittest.TestCase):
     def test_non_bonsai_opt_in_uses_conservative_token_estimate(self):
         api_error = urllib.error.HTTPError(
