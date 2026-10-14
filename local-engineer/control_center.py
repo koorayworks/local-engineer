@@ -300,6 +300,96 @@ def delete_task(task_id: str) -> bool:
         return True
 
 
+def _set_task_fields(task_id: str, **fields) -> bool:
+    with TASK_LOCK:
+        tasks = load_tasks()
+        for task in tasks:
+            if task.get("id") == task_id:
+                task.update(fields)
+                save_tasks(tasks)
+                return True
+    return False
+
+
+def _execute_task(task_id: str, project: str, title: str) -> None:
+    log_dir = CONTROL_DIR / "runs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / (task_id + ".log")
+    runtime = pathlib.Path(__file__).resolve().with_name("local_engineer.py")
+    command = [sys.executable, str(runtime), "ask", project + ": " + title]
+    return_code = 1
+    try:
+        with log_path.open("w", encoding="utf-8") as stream:
+            stream.write("$ " + " ".join(command) + "\n\n")
+            stream.flush()
+            process = subprocess.Popen(
+                command, cwd=str(runtime.parent), stdout=stream,
+                stderr=subprocess.STDOUT, text=True,
+                start_new_session=(os.name == "posix"),
+            )
+            with RUN_LOCK:
+                ACTIVE_RUNS[task_id] = process
+            return_code = process.wait()
+    except Exception as exc:
+        with log_path.open("a", encoding="utf-8") as stream:
+            stream.write("\nControl Center runner error: " + repr(exc) + "\n")
+    finally:
+        _set_task_fields(
+            task_id,
+            status="completed" if return_code == 0 else "failed",
+            finished_at=dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+            exit_code=return_code,
+            log_file=str(log_path),
+        )
+        with RUN_LOCK:
+            ACTIVE_RUNS.pop(task_id, None)
+
+
+def start_task(task_id: str) -> dict:
+    with RUN_LOCK:
+        if ACTIVE_RUNS:
+            raise ValueError("別のタスクが実行中です。完了後に開始してください")
+        ACTIVE_RUNS[task_id] = None
+    try:
+        with TASK_LOCK:
+            tasks = load_tasks()
+            task = next((item for item in tasks if item.get("id") == task_id), None)
+            if task is None:
+                raise ValueError("task not found")
+            if task.get("status") != "queued":
+                raise ValueError("queued状態のタスクだけ実行できます")
+            project = str(task.get("project", "")).strip()
+            if not project or project not in project_names():
+                raise ValueError("実行対象プロジェクトが未指定か、登録されていません")
+            task["status"] = "running"
+            task["started_at"] = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+            save_tasks(tasks)
+            snapshot = dict(task)
+        worker = threading.Thread(
+            target=_execute_task,
+            args=(task_id, project, snapshot["title"]),
+            name="control-center-task-" + task_id[:8],
+            daemon=True,
+        )
+        worker.start()
+        return snapshot
+    except Exception:
+        with RUN_LOCK:
+            ACTIVE_RUNS.pop(task_id, None)
+        raise
+
+
+def task_log(task_id: str) -> str:
+    if not any(task.get("id") == task_id for task in load_tasks()):
+        raise ValueError("task not found")
+    path = CONTROL_DIR / "runs" / (task_id + ".log")
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace")
+        return content[-20000:]
+    except (FileNotFoundError, OSError):
+        return ""
+
+
 def ensure_token() -> str:
     _ensure_control_dir()
     if TOKEN_PATH.exists():
