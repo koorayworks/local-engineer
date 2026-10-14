@@ -41,6 +41,20 @@ class ControlCenterQueueTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "not registered"):
                 cc.add_task("inspect unknown project", "normal", "not-registered")
 
+    def test_start_task_marks_selected_project_running_without_inline_execution(self):
+        with patch.object(cc, "project_names", return_value=["demo"]):
+            task = cc.add_task("inspect only", "normal", "demo")
+            with patch.object(cc.threading, "Thread") as thread_factory:
+                try:
+                    started = cc.start_task(task["id"])
+                    self.assertEqual(started["status"], "running")
+                    self.assertEqual(started["project"], "demo")
+                    thread_factory.assert_called_once()
+                    thread_factory.return_value.start.assert_called_once()
+                finally:
+                    with cc.RUN_LOCK:
+                        cc.ACTIVE_RUNS.pop(task["id"], None)
+
     def test_invalid_task_is_rejected(self):
         for title, priority in (("", "normal"), ("x", "urgent"), ("x" * 1001, "normal")):
             with self.subTest(title_length=len(title), priority=priority):
