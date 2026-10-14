@@ -102,6 +102,14 @@ class ControlCenterQueueTests(unittest.TestCase):
         }):
             self.assertEqual(cc._chat_model(), "qwen2.5-coder:3b")
 
+    def test_chat_prompt_answers_model_identity_directly_in_japanese(self):
+        messages = cc._chat_messages("今使っているモデル名は？", "qwen2.5-coder:3b")
+        system = messages[0]["content"]
+        self.assertIn("qwen2.5-coder:3b", system)
+        self.assertIn("do not ask the user to tell you", system)
+        self.assertIn("Do not merely repeat or rephrase", system)
+        self.assertIn("cannot inspect or edit files", system)
+
     def test_chat_stream_emits_content_deltas_and_uses_streaming_api(self):
         class FakeResponse:
             status = 200
