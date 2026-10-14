@@ -34,6 +34,13 @@ class ControlCenterQueueTests(unittest.TestCase):
         self.assertEqual(cc.load_tasks(), [])
         self.assertFalse(cc.delete_task(task["id"]))
 
+    def test_registered_project_is_saved_and_unregistered_project_rejected(self):
+        with patch.object(cc, "project_names", return_value=["grin_rc"]):
+            task = cc.add_task("inspect WS2812", "normal", "grin_rc")
+            self.assertEqual(task["project"], "grin_rc")
+            with self.assertRaisesRegex(ValueError, "not registered"):
+                cc.add_task("inspect unknown project", "normal", "not-registered")
+
     def test_invalid_task_is_rejected(self):
         for title, priority in (("", "normal"), ("x", "urgent"), ("x" * 1001, "normal")):
             with self.subTest(title_length=len(title), priority=priority):
