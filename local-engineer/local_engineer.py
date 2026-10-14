@@ -518,6 +518,15 @@ def model_id():
     return data['data'][0]['id']
 
 
+def model_api_status():
+    """Return a truthful status label and details for the selected model API."""
+    data = get_json(API_BASE + '/models', timeout=3)
+    model = data.get('data', [{}])[0].get('id', 'unknown')
+    configured_bonsai = os.environ.get('BONSAI_API_BASE', 'http://127.0.0.1:8080/v1').rstrip('/')
+    label = 'Bonsai API' if API_BASE.rstrip('/') == configured_bonsai else 'Active model API'
+    return label, f'{API_BASE} ({model})'
+
+
 def tool_defs(phase='discovery'):
     def f(name, desc, props, required):
         return {'type':'function','function':{'name':name,'description':desc,'parameters':{'type':'object','properties':props,'required':required}}}
@@ -598,12 +607,13 @@ def doctor(cfg):
     print(f'Runtime module        : {runtime_path}')
     print(f'Runtime git commit    : {commit or "unknown"}')
 
+    api_label = 'Bonsai API' if API_BASE.rstrip('/') == os.environ.get(
+        'BONSAI_API_BASE', 'http://127.0.0.1:8080/v1').rstrip('/') else 'Active model API'
     try:
-        data = get_json(API_BASE + '/models', timeout=3)
-        model = data.get('data',[{}])[0].get('id','unknown')
-        checks.append(('Bonsai API', True, f'127.0.0.1:8080 ({model})'))
-    except Exception as e:
-        checks.append(('Bonsai API', False, '127.0.0.1:8080'))
+        api_label, api_detail = model_api_status()
+        checks.append((api_label, True, api_detail))
+    except Exception:
+        checks.append((api_label, False, API_BASE))
 
     host = os.environ.get('LOCAL_ENGINEER_SSH_HOST', cfg.get('settings',{}).get('ssh_host','wsl'))
     tunnel_ok = False
@@ -667,6 +677,18 @@ def main():
     cfg=load_cfg() if CFG.exists() or args.cmd!='resume' else {'settings':{},'projects':{}}
     if args.cmd=='doctor': raise SystemExit(doctor(cfg))
     if args.cmd=='status':
+        # The opt-in Qwen launcher sets LOCAL_ENGINEER_API_BASE. Do not route its
+        # status command through the legacy Bonsai process reporter, which can
+        # misleadingly claim Bonsai is the active model.
+        if os.environ.get('LOCAL_ENGINEER_API_BASE'):
+            print('=== Local Engineer model status ===')
+            try:
+                label, detail = model_api_status()
+                print(f'{label:20} : RUNNING  {detail}')
+                return
+            except Exception as error:
+                print(f'Active model API     : FAIL  {API_BASE} ({error})', file=sys.stderr)
+                raise SystemExit(1)
         subprocess.run([str(HOME/'bin/llm'),'status']); return
     if args.cmd=='projects':
         for k,v in cfg['projects'].items(): print(f"{k:20} {v.get('transport','local'):5} {v['root']}")
