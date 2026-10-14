@@ -12,7 +12,20 @@ cat > "$HOME/bin/local-engineer" <<WRAP
 #!/bin/zsh
 exec /usr/bin/env python3 "$SRC/local_engineer.py" "\$@"
 WRAP
-chmod +x "$HOME/bin/local-engineer"
+cat > "$HOME/bin/local-engineer-qwen" <<WRAP
+#!/bin/zsh
+set -e
+API_BASE="${LOCAL_ENGINEER_API_BASE:-http://127.0.0.1:11434/v1}"
+if ! /usr/bin/curl -fsS --max-time 3 "${API_BASE}/models" >/dev/null; then
+  echo "[ERR] Ollama API is not responding at ${API_BASE}" >&2
+  echo "Start Ollama with: /Applications/Ollama.app/Contents/Resources/ollama serve" >&2
+  exit 1
+fi
+export LOCAL_ENGINEER_API_BASE="${API_BASE}"
+export LOCAL_ENGINEER_ALLOW_NON_BONSAI=1
+exec /usr/bin/env python3 "$SRC/local_engineer.py" "\$@"
+WRAP
+chmod +x "$HOME/bin/local-engineer" "$HOME/bin/local-engineer-qwen"
 if [ ! -f "$CFG/projects.json" ]; then
   cp "$SRC/projects.json" "$CFG/projects.json"
   echo "[OK] installed default config: $CFG/projects.json"
