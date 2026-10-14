@@ -317,7 +317,7 @@ def _execute_task(task_id: str, project: str, title: str) -> None:
     log_dir = CONTROL_DIR / "runs"
     log_path = log_dir / (task_id + ".log")
     runtime = pathlib.Path(__file__).resolve().with_name("local_engineer.py")
-    command = [sys.executable, str(runtime), "ask", project + ": " + title]
+    command = [sys.executable, str(runtime), "fix", project, title]
     return_code = 1
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
