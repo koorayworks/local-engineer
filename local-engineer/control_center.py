@@ -106,7 +106,7 @@ textarea{resize:vertical;min-height:85px}.row{display:flex;gap:8px;align-items:c
 <div class="section-title" style="margin-top:18px">手動でタスクを追加</div>
 <textarea id="task-input" placeholder="キューに登録する作業を具体的に記入"></textarea>
 <div class="row" style="margin-top:8px"><select id="priority" aria-label="優先度"><option value="normal">通常</option><option value="high">高</option><option value="low">低</option></select><button id="add-task" class="primary">キューに追加</button></div>
-<div class="foot">AIの計画を確認してからキューに登録できます。キューは保存のみで、実行ランナーはまだ接続されていません。</div>
+<div class="foot">計画案は確認してから登録します。実行対象を選び、各タスクの「実行」を押したときだけLocal Engineerを起動します。実行ログで結果を確認してください。</div>
 <div id="tasks" style="margin-top:12px"></div>
 </section>
 </div>
@@ -313,12 +313,12 @@ def _set_task_fields(task_id: str, **fields) -> bool:
 
 def _execute_task(task_id: str, project: str, title: str) -> None:
     log_dir = CONTROL_DIR / "runs"
-    log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / (task_id + ".log")
     runtime = pathlib.Path(__file__).resolve().with_name("local_engineer.py")
     command = [sys.executable, str(runtime), "ask", project + ": " + title]
     return_code = 1
     try:
+        log_dir.mkdir(parents=True, exist_ok=True)
         # Never launch the CLI unless the selected Control Center model endpoint responds.
         with urllib.request.urlopen(API_BASE.rstrip("/") + "/models", timeout=3):
             pass
@@ -336,8 +336,12 @@ def _execute_task(task_id: str, project: str, title: str) -> None:
                 ACTIVE_RUNS[task_id] = process
             return_code = process.wait()
     except Exception as exc:
-        with log_path.open("a", encoding="utf-8") as stream:
-            stream.write("\nControl Center runner error: " + repr(exc) + "\n")
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8") as stream:
+                stream.write("\nControl Center runner error: " + repr(exc) + "\n")
+        except OSError:
+            pass
     finally:
         _set_task_fields(
             task_id,
