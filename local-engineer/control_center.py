@@ -722,9 +722,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/status":
             self._send_json(current_status())
+        elif path == "/api/projects":
+            self._send_json({"projects": project_names()})
         elif path == "/api/tasks":
             with TASK_LOCK:
                 self._send_json({"tasks": load_tasks()})
+        elif path.startswith("/api/tasks/") and path.endswith("/log"):
+            task_id = path[len("/api/tasks/"):-len("/log")].strip("/")
+            try:
+                self._send_json({"log": task_log(task_id)})
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, 404)
         elif path == "/api/events":
             from urllib.parse import parse_qs
             query = parse_qs(urlparse(self.path).query)
@@ -744,8 +752,14 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         try:
             body = self._body()
-            if path == "/api/tasks":
-                task = add_task(body.get("title", ""), body.get("priority", "normal"))
+            if path.startswith("/api/tasks/") and path.endswith("/run"):
+                task_id = path[len("/api/tasks/"):-len("/run")].strip("/")
+                if not task_id or "/" in task_id:
+                    raise ValueError("invalid task id")
+                task = start_task(task_id)
+                self._send_json({"task": task}, 202)
+            elif path == "/api/tasks":
+                task = add_task(body.get("title", ""), body.get("priority", "normal"), body.get("project", ""))
                 self._send_json({"task": task}, 201)
             elif path == "/api/plan":
                 request_id = str(body.get("request_id", ""))
@@ -762,7 +776,7 @@ class Handler(BaseHTTPRequestHandler):
                     with PLAN_LOCK:
                         ACTIVE_PLANS.pop(request_id, None)
             elif path == "/api/tasks/batch":
-                created = add_tasks(body.get("tasks", []))
+                created = add_tasks(body.get("tasks", []), body.get("project", ""))
                 self._send_json({"tasks": created}, 201)
             elif path == "/api/chat":
                 reply = bonsai_chat(body.get("message", ""))
