@@ -422,8 +422,9 @@ def bonsai_plan(goal: str, request_id: str | None = None) -> dict:
 
 
 def _chat_model() -> str:
-    if MODEL_ID:
-        return MODEL_ID
+    model = os.environ.get("LOCAL_ENGINEER_MODEL", os.environ.get("BONSAI_MODEL", MODEL_ID)).strip()
+    if model:
+        return model
     models_request = urllib.request.Request(API_BASE.rstrip("/") + "/models", method="GET")
     try:
         with urllib.request.urlopen(models_request, timeout=5) as response:
