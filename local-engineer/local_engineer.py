@@ -6,7 +6,7 @@ from zmk_support import (artifact_name, copy_uf2, discover_zmk_project,
 HOME = pathlib.Path.home()
 CFG = pathlib.Path(os.environ.get('LOCAL_ENGINEER_CONFIG', HOME/'.config/local-engineer/projects.json'))
 STATE = HOME/'.local/state/local-engineer'
-API_BASE = os.environ.get('BONSAI_API_BASE', 'http://127.0.0.1:8080/v1')
+API_BASE = os.environ.get('LOCAL_ENGINEER_API_BASE', os.environ.get('BONSAI_API_BASE', 'http://127.0.0.1:8080/v1'))
 MAX_ROUNDS = 20
 MAX_OUTPUT = 2500
 KEEP_TOOL_ROUNDS = 2
