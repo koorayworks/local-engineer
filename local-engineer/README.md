@@ -9,7 +9,7 @@ Mac mini local-agent layer for Bonsai 2 27B, Technocore integration, and registe
 From the repository root:
 
 ```bash
-git clone --branch local-engineer-v0.1 --single-branch https://github.com/vwbugowner1976/local-engineer.git ~/local-engineer-src
+git clone --branch local-engineer-v0.1 --single-branch https://github.com/koorayworks/local-engineer.git ~/local-engineer-src
 cd ~/local-engineer-src/local-engineer
 ./install.sh
 source ~/.zshrc

@@ -39,7 +39,7 @@ Example registered projects in the current setup include keyboard/firmware work 
 The implementation and its installation scripts live in `local-engineer/`:
 
 ```bash
-git clone --branch local-engineer-v0.1 --single-branch https://github.com/vwbugowner1976/local-engineer.git ~/local-engineer-src
+git clone --branch local-engineer-v0.1 --single-branch https://github.com/koorayworks/local-engineer.git ~/local-engineer-src
 cd ~/local-engineer-src/local-engineer
 ./install.sh
 source ~/.zshrc
